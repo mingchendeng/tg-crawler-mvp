@@ -1,4 +1,5 @@
 import os
+import secrets
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict
 
@@ -8,10 +9,17 @@ from fastapi import Request
 
 from db_util import db_execute
 
-ADMIN_SECRET = os.getenv('ADMIN_SECRET', 'change-me-in-production')
+_secret = os.getenv('ADMIN_SECRET', '')
+if len(_secret.encode('utf-8')) < 32:
+    import logging
+    logging.warning('ADMIN_SECRET is too short (< 32 bytes). Generating a random fallback. '
+                     'Set ADMIN_SECRET to a secure random string >= 32 bytes in production.')
+    _secret = secrets.token_hex(32)
+ADMIN_SECRET = _secret
 JWT_ALG = 'HS256'
 COOKIE_NAME = 'session'
 ADMIN_ROLES = {'admin'}
+COOKIE_MAX_AGE = 7 * 24 * 3600  # 7 days
 
 
 class LoginRedirect(Exception):
@@ -42,6 +50,26 @@ def create_token(user_id: int) -> str:
 def is_admin(user: Dict[str, Any]) -> bool:
     role = str(user.get('role') or '').strip().lower()
     return role in ADMIN_ROLES
+
+
+def set_auth_cookie(response, token: str):
+    is_secure = os.getenv('ENFORCE_HTTPS', '').strip().lower() in ('1', 'true', 'yes')
+    response.set_cookie(
+        key=COOKIE_NAME,
+        value=token,
+        httponly=True,
+        secure=is_secure,
+        samesite='lax',
+        max_age=COOKIE_MAX_AGE,
+    )
+
+
+def delete_auth_cookie(response):
+    response.delete_cookie(COOKIE_NAME, httponly=True, samesite='lax')
+
+
+def generate_csrf_token() -> str:
+    return secrets.token_hex(32)
 
 
 def get_current_user(request: Request, conn) -> Dict[str, Any]:

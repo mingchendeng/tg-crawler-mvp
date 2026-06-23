@@ -27,23 +27,20 @@
         <div class="d-flex flex-wrap justify-content-between align-items-center gap-2">
             <div class="small">
                 <span class="fw-bold me-2">采集链路</span>
-                {% if runtime_status.ready.crawler_pipeline %}
-                <span class="badge bg-success">已就绪</span>
-                {% else %}
-                <span class="badge bg-warning text-dark">未就绪</span>
-                {% endif %}
-                <span class="text-muted ms-2">DB: {{ 'OK' if runtime_status.database.reachable else 'DOWN' }}</span>
-                <span class="text-muted ms-2">MinIO: {{ 'RUNNING' if runtime_status.services.minio.running else 'STOPPED' }}</span>
-                <span class="text-muted ms-2">Crawler: {{ 'RUNNING' if runtime_status.services.crawler.running else 'STOPPED' }}</span>
+                <span id="pipelineStatusBadge" class="badge {% if runtime_status.ready.crawler_pipeline %}bg-success{% else %}bg-warning text-dark{% endif %}">
+                    {{ '已就绪' if runtime_status.ready.crawler_pipeline else '未就绪' }}
+                </span>
+                <span id="pipelineDb" class="text-muted ms-2">DB: {{ 'OK' if runtime_status.database.reachable else 'DOWN' }}</span>
+                <span id="pipelineProxy" class="text-muted ms-2">Proxy: {{ 'OK' if runtime_status.services.proxy.running else 'DOWN' }}</span>
+                <span id="pipelineCrawler" class="text-muted ms-2">Crawler: {{ 'RUNNING' if runtime_status.services.crawler.running else 'STOPPED' }}</span>
             </div>
             {% if user.role == 'admin' %}
             <div class="d-flex gap-2">
-                <button class="btn btn-sm btn-primary" type="button" onclick="quickStartPipeline()">一键启动采集链路</button>
+                <button class="btn btn-sm btn-primary" type="button" onclick="quickStartPipeline(this)">一键启动采集链路</button>
                 <a href="/ops" class="btn btn-sm btn-outline-secondary">系统控制台</a>
             </div>
             {% endif %}
         </div>
-        <div id="quickStartResult" class="small mt-2"></div>
     </div>
 </div>
 
@@ -179,10 +176,9 @@
                     <div class="col-md-3 text-end">
                         <button class="btn btn-sm btn-outline-secondary" type="button" onclick="toggleAllRows(true)">全选</button>
                         <button class="btn btn-sm btn-outline-secondary" type="button" onclick="toggleAllRows(false)">清空</button>
-                        <button class="btn btn-sm btn-primary" type="button" onclick="submitBulkReview()">批量更新</button>
+                        <button class="btn btn-sm btn-primary" type="button" onclick="submitBulkReview(this)">批量更新</button>
                     </div>
                 </div>
-                <div id="bulkResult" class="small mt-2"></div>
             </div>
         </div>
 
@@ -241,7 +237,7 @@
                                     {{ "%.0f%%"|format(conf*100) }}
                                 </span>
                             </td>
-                            <td>{% if row.media_count > 0 %}<span class="badge bg-info">{{ row.media_count }}</span>{% else %}-{% endif %}</td>
+                            <td>{% if row.media_count > 0 %}<span class="badge bg-info" style="cursor:pointer" onclick="previewMessageMedia({{ row.id }})">{{ row.media_count }}</span>{% else %}-{% endif %}</td>
                             <td>
                                 <span class="badge bg-{{ 'secondary' if row.review_status=='pending' else ('success' if row.review_status=='approved' else ('danger' if row.review_status=='rejected' else 'warning')) }}">
                                     {{ row.review_status }}
@@ -305,14 +301,14 @@ function getSelectedIds() {
     return Array.from(document.querySelectorAll('.row-check:checked')).map((el) => Number(el.value));
 }
 
-async function submitBulkReview() {
+async function submitBulkReview(btn) {
     const ids = getSelectedIds();
-    const result = document.getElementById('bulkResult');
     if (ids.length === 0) {
-        result.innerHTML = '<span class="text-danger">请先选择至少一条消息</span>';
+        showToast('请先选择至少一条消息', 'danger');
         return;
     }
 
+    showLoading(btn);
     const data = new FormData();
     data.append('message_ids', JSON.stringify(ids));
     data.append('review_status', document.getElementById('bulkStatus').value);
@@ -324,31 +320,79 @@ async function submitBulkReview() {
         method: 'POST',
         body: data,
     });
+    const payload = await resp.json();
+    hideLoading(btn, '批量更新');
     if (!resp.ok) {
-        result.innerHTML = '<span class="text-danger">批量更新失败，请检查日志</span>';
+        showToast(payload.detail || '批量更新失败，请检查日志', 'danger');
         return;
     }
 
-    const payload = await resp.json();
-    result.innerHTML = `<span class="text-success">批量更新成功：${payload.updated} 条</span>`;
+    showToast(`批量更新成功：${payload.updated} 条`, 'success');
     setTimeout(() => location.reload(), 500);
 }
 
-async function quickStartPipeline() {
-    const result = document.getElementById('quickStartResult');
-    result.innerHTML = '<span class="text-muted">正在启动，请稍候...</span>';
-
+async function quickStartPipeline(btn) {
+    showLoading(btn);
     const resp = await fetch('/api/system/start-all', { method: 'POST' });
     const payload = await resp.json();
+    hideLoading(btn, '一键启动采集链路');
     if (!resp.ok || !payload.ok) {
         const errors = (payload.errors || []).join(' | ') || '启动失败';
-        result.innerHTML = `<span class="text-danger">${errors}</span>`;
+        showToast(errors, 'danger');
         return;
     }
 
     const actions = (payload.actions || []).join(', ');
-    result.innerHTML = `<span class="text-success">启动完成：${actions}</span>`;
+    showToast(`启动完成：${actions}`, 'success');
     setTimeout(() => location.reload(), 700);
 }
+
+// Preview media from list page (lazy load via API)
+async function previewMessageMedia(msgId) {
+    try {
+        const resp = await fetch('/api/messages/' + msgId + '/media');
+        const data = await resp.json();
+        if (data.ok && data.media.length > 0) {
+            openMediaPreview(data.media, 0);
+        } else {
+            showToast('没有媒体文件', 'warning');
+        }
+    } catch (e) {
+        showToast('加载媒体失败: ' + e.message, 'danger');
+    }
+}
+
+// Dynamic pipeline status refresh every 15s
+async function refreshPipelineStatus() {
+    try {
+        const resp = await fetch('/api/system/status');
+        const payload = await resp.json();
+        if (!resp.ok || !payload.ok) return;
+        const s = payload.status;
+        const ready = !!s.ready.crawler_pipeline;
+        const badge = document.getElementById('pipelineStatusBadge');
+        if (badge) {
+            badge.className = 'badge ' + (ready ? 'bg-success' : 'bg-warning text-dark');
+            badge.textContent = ready ? '已就绪' : '未就绪';
+        }
+        const dbEl = document.getElementById('pipelineDb');
+        const proxyEl = document.getElementById('pipelineProxy');
+        const crawlerEl = document.getElementById('pipelineCrawler');
+        if (dbEl) {
+            dbEl.textContent = 'DB: ' + (s.database.reachable ? 'OK' : 'DOWN');
+            dbEl.className = 'text-muted ms-2' + (s.database.reachable ? '' : ' text-danger');
+        }
+        if (proxyEl) {
+            proxyEl.textContent = 'Proxy: ' + (s.services.proxy.running ? 'OK' : 'DOWN');
+            proxyEl.className = 'text-muted ms-2' + (s.services.proxy.running ? '' : ' text-danger');
+        }
+        if (crawlerEl) {
+            crawlerEl.textContent = 'Crawler: ' + (s.services.crawler.running ? 'RUNNING' : 'STOPPED');
+            crawlerEl.className = 'text-muted ms-2' + (s.services.crawler.running ? '' : ' text-danger');
+        }
+    } catch (_) {}
+}
+
+setInterval(refreshPipelineStatus, 15000);
 </script>
 {% endblock %}

@@ -1,5 +1,6 @@
 import os
 import sys
+import socket
 import asyncio
 import json
 import logging
@@ -13,7 +14,7 @@ from psycopg2.extras import Json
 from config import Config
 from db import Database, has_meaningful_extracted
 from extractor import LooseExtractor
-from uploader import MinIOUploader
+from uploader import S3Uploader
 from dedupe_llm import LLMDeduper
 
 logging.basicConfig(
@@ -48,7 +49,7 @@ class IncrementalCrawler:
             proxy=self._build_proxy(),
         )
         self.extractor = LooseExtractor()
-        self.uploader = MinIOUploader()
+        self.uploader = S3Uploader()
         self.deduper = LLMDeduper()
         self.tmp_dir = Path(tempfile.gettempdir()) / 'tg_media'
         self.tmp_dir.mkdir(parents=True, exist_ok=True)
@@ -98,6 +99,19 @@ class IncrementalCrawler:
         proxy_host = self.proxy_host
         if proxy_host == 'host.docker.internal' and not Path('/.dockerenv').exists():
             proxy_host = '127.0.0.1'
+
+        # Test if proxy is reachable before using it
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(1.5)
+            result = sock.connect_ex((proxy_host, self.proxy_port))
+            sock.close()
+            if result != 0:
+                logger.warning('Proxy %s:%s is unreachable, falling back to direct connection', proxy_host, self.proxy_port)
+                return None
+        except Exception as e:
+            logger.warning('Proxy check failed (%s), falling back to direct connection', e)
+            return None
 
         try:
             import socks

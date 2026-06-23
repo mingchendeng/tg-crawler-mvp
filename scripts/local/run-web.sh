@@ -5,11 +5,12 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
 DATABASE_URL="${DATABASE_URL:-postgresql://tguser:tgpwd@127.0.0.1:5432/tg_crawler}"
-S3_ENDPOINT="${S3_ENDPOINT:-http://127.0.0.1:9000}"
-S3_PUBLIC_ENDPOINT="${S3_PUBLIC_ENDPOINT:-http://127.0.0.1:9000}"
-S3_ACCESS_KEY="${S3_ACCESS_KEY:-minioadmin}"
-S3_SECRET_KEY="${S3_SECRET_KEY:-minioadmin}"
-S3_BUCKET="${S3_BUCKET:-tg-media}"
+S3_ENDPOINT="${S3_ENDPOINT:-}"
+S3_PUBLIC_ENDPOINT="${S3_PUBLIC_ENDPOINT:-}"
+S3_ACCESS_KEY="${S3_ACCESS_KEY:-}"
+S3_SECRET_KEY="${S3_SECRET_KEY:-}"
+S3_BUCKET="${S3_BUCKET:-tg-crawler-media-ffe95227}"
+S3_REGION="${S3_REGION:-ap-east-1}"
 ADMIN_SECRET="${ADMIN_SECRET:-change-me-in-production}"
 PORT="${PORT:-8080}"
 FORCE="${FORCE:-}"
@@ -31,7 +32,7 @@ for env_file in "$REPO_ROOT/.env" "$REPO_ROOT/.env.local"; do
     fi
 done
 
-export DATABASE_URL S3_ENDPOINT S3_PUBLIC_ENDPOINT S3_ACCESS_KEY S3_SECRET_KEY S3_BUCKET ADMIN_SECRET
+export DATABASE_URL S3_ENDPOINT S3_PUBLIC_ENDPOINT S3_ACCESS_KEY S3_SECRET_KEY S3_BUCKET S3_REGION ADMIN_SECRET
 
 # Single-instance guard (skip if FORCE=1)
 if [ -z "$FORCE" ]; then

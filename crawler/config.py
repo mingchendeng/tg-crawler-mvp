@@ -21,7 +21,8 @@ class Config:
     S3_PUBLIC_ENDPOINT: str = os.getenv('S3_PUBLIC_ENDPOINT', os.getenv('S3_ENDPOINT', 'http://localhost:9000'))
     S3_ACCESS_KEY: str = os.getenv('S3_ACCESS_KEY', 'minioadmin')
     S3_SECRET_KEY: str = os.getenv('S3_SECRET_KEY', 'minioadmin')
-    S3_BUCKET: str = os.getenv('S3_BUCKET', 'tg-media')
+    S3_BUCKET: str = os.getenv('S3_BUCKET', 'tg-crawler-media-ffe95227')
+    S3_REGION: str = os.getenv('S3_REGION', 'ap-east-1')
 
     TG_PROXY_TYPE: str = os.getenv('TG_PROXY_TYPE', '').strip().lower()
     TG_PROXY_HOST: str = os.getenv('TG_PROXY_HOST', '').strip()

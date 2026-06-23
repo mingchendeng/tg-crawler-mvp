@@ -112,9 +112,9 @@
                         <div class="d-flex align-items-center gap-2">
                             <span class="badge bg-info">{{ row.grouped_media_count }}</span>
                             {% if row.preview_media_type == 'photo' and row.preview_url %}
-                            <a href="{{ row.preview_s3_url or row.preview_url }}" target="_blank"><img src="{{ row.preview_url }}" style="width:42px;height:42px;object-fit:cover;border-radius:6px"></a>
+                            <img src="{{ row.preview_url }}" style="width:42px;height:42px;object-fit:cover;border-radius:6px;cursor:pointer" onclick="previewMessageMedia({{ row.message_id }})">
                             {% elif row.preview_media_type == 'video' and row.preview_s3_url %}
-                            <a href="{{ row.preview_s3_url }}" target="_blank" class="small">视频预览</a>
+                            <span class="small" style="cursor:pointer;color:var(--bs-link-color)" onclick="previewMessageMedia({{ row.message_id }})">▶ 视频预览</span>
                             {% endif %}
                         </div>
                         {% else %}

@@ -1,29 +1,97 @@
 """FastAPI admin app for Telegram crawler operations and review workflows."""
 
+import asyncio
 import json
 import logging
 import os
 import platform
 import re
+import shutil
 import signal
 import socket
 import subprocess
+import tempfile
 import threading
 import time
+import uuid
 from typing import Any, Dict, List, Optional
 from urllib.parse import urlencode
 
+from io import BytesIO
+from base64 import b64encode
+
+import qrcode
+from telethon import TelegramClient
+from telethon import errors as tg_errors
+
 import psycopg2
 from fastapi import Depends, FastAPI, Form, HTTPException, Query, Request
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response, StreamingResponse
+from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from psycopg2.extras import RealDictCursor
 
-from auth import LoginRedirect, create_token, get_current_user, hash_password, is_admin, verify_password
+from auth import (
+    LoginRedirect,
+    create_token,
+    delete_auth_cookie,
+    get_current_user,
+    hash_password,
+    is_admin,
+    set_auth_cookie,
+    verify_password,
+)
 from db_util import db_execute
 
 app = FastAPI(title='TG Crawler Admin')
 templates = Jinja2Templates(directory='templates')
+app.mount('/static', StaticFiles(directory='static'), name='static')
+
+# ---------- Security middleware ----------
+
+LOGIN_ATTEMPTS: Dict[str, list] = {}
+RATE_LIMIT_WINDOW = 300  # 5 min
+RATE_LIMIT_MAX = 10
+
+
+def _check_login_rate_limit(ip: str):
+    now = time.time()
+    attempts = LOGIN_ATTEMPTS.get(ip, [])
+    attempts = [t for t in attempts if now - t < RATE_LIMIT_WINDOW]
+    if len(attempts) >= RATE_LIMIT_MAX:
+        raise HTTPException(429, '登录尝试过于频繁，请 5 分钟后重试')
+    attempts.append(now)
+    LOGIN_ATTEMPTS[ip] = attempts
+
+
+def _check_csrf(request: Request):
+    if request.method in ('GET', 'HEAD', 'OPTIONS'):
+        return
+    origin = request.headers.get('origin', '')
+    referer = request.headers.get('referer', '')
+    host = request.headers.get('host', '')
+    allowed = {f'http://{host}', f'https://{host}'}
+    if origin and origin not in allowed:
+        raise HTTPException(403, 'CSRF: origin rejected')
+    if referer:
+        from urllib.parse import urlparse
+        ref_netloc = urlparse(referer).netloc
+        if ref_netloc and ref_netloc != host:
+            raise HTTPException(403, 'CSRF: referer rejected')
+
+
+@app.middleware('http')
+async def security_middleware(request: Request, call_next):
+    try:
+        _check_csrf(request)
+    except HTTPException as e:
+        return JSONResponse(status_code=e.status_code, content={'detail': e.detail})
+    response = await call_next(request)
+    response.headers['X-Content-Type-Options'] = 'nosniff'
+    response.headers['X-Frame-Options'] = 'DENY'
+    response.headers['X-XSS-Protection'] = '1; mode=block'
+    response.headers['Referrer-Policy'] = 'strict-origin-when-cross-origin'
+    return response
 
 DB_URL = os.getenv('DATABASE_URL', 'postgresql://tguser:tgpwd@localhost:5432/tg_crawler')
 APP_ROOT = os.path.abspath(os.path.dirname(__file__))
@@ -34,6 +102,12 @@ MINIO_API_PORT = 9000
 MINIO_CONSOLE_PORT = 9001
 MINIO_DATA_DIR = os.path.join(REPO_ROOT, '.local', 'minio', 'data')
 SERVICE_START_TIMEOUT_SEC = 12.0
+TG_SESSION_DIR = os.path.join(REPO_ROOT, 'crawler', 'session')
+TG_SESSION_PATH = os.path.join(TG_SESSION_DIR, 'tg_session.session')
+
+# In-memory store for active QR login sessions
+# token -> {'client': TelegramClient, 'qr': QRLogin, 'started': float}
+qr_sessions: Dict[str, Dict[str, Any]] = {}
 SERVICE_STOP_TIMEOUT_SEC = 8.0
 SYSTEM_ACTION_LOCK_TIMEOUT_SEC = 5.0
 PLATFORM_IS_WINDOWS = os.name == 'nt'
@@ -41,7 +115,11 @@ _SCRIPT_EXT = '.ps1' if PLATFORM_IS_WINDOWS else '.sh'
 SERVICE_SCRIPT_NAME = {
     'crawler': f'run-crawler{_SCRIPT_EXT}',
     'minio': f'run-minio{_SCRIPT_EXT}',
+    'proxy': f'run-proxy{_SCRIPT_EXT}',
 }
+
+TG_PROXY_HOST = os.getenv('TG_PROXY_HOST', '127.0.0.1')
+TG_PROXY_PORT = int(os.getenv('TG_PROXY_PORT', '7994') or 7994)
 
 LOGGER = logging.getLogger(__name__)
 SYSTEM_ACTION_LOCK = threading.Lock()
@@ -132,6 +210,15 @@ def _require_positive_page_size(value: int) -> int:
 def _require_admin_user(user: Dict[str, Any]):
     if not is_admin(user):
         raise HTTPException(403, '仅管理员可执行该操作')
+
+
+def _log_audit_simple(db, reviewer_id: int, action: str, detail: str):
+    rid = reviewer_id if reviewer_id > 0 else None
+    db_execute(
+        db,
+        'INSERT INTO audit_logs (message_id, reviewer_id, action, old_values, new_values) VALUES (NULL, %s, %s, %s, %s)',
+        (rid, action, _json_dumps({'detail': detail}), '{}'),
+    )
 
 
 def _parse_channel_lines(raw: Optional[str]) -> List[str]:
@@ -352,7 +439,7 @@ def _collect_unix_process_status() -> Dict[str, List[int]]:
                 except ValueError:
                     continue
 
-                if 'uvicorn' in cmd and 'main:app' in cmd and REPO_ROOT in cmd:
+                if 'uvicorn' in cmd and 'main:app' in cmd:
                     web_pids.append(pid)
                 elif 'main.py' in cmd and os.path.join(REPO_ROOT, 'crawler') in cmd:
                     crawler_pids.append(pid)
@@ -393,12 +480,14 @@ def _collect_runtime_status(db) -> Dict[str, Any]:
 
     minio_api_ready = _is_port_listening(MINIO_API_PORT)
     minio_console_ready = _is_port_listening(MINIO_CONSOLE_PORT)
+    proxy_ready = _is_port_listening(TG_PROXY_PORT)
 
     return {
         'database': {'reachable': db_ready},
         'services': {
             'web': {'running': len(proc['web_pids']) > 0, 'pids': proc['web_pids']},
             'crawler': {'running': len(proc['crawler_pids']) > 0, 'pids': proc['crawler_pids']},
+            'proxy': {'running': proxy_ready, 'host': TG_PROXY_HOST, 'port': TG_PROXY_PORT},
             'minio': {
                 'running': len(proc['minio_pids']) > 0,
                 'pids': proc['minio_pids'],
@@ -409,7 +498,7 @@ def _collect_runtime_status(db) -> Dict[str, Any]:
             },
         },
         'ready': {
-            'crawler_pipeline': db_ready and minio_api_ready and len(proc['crawler_pids']) > 0,
+            'crawler_pipeline': db_ready and proxy_ready and len(proc['crawler_pids']) > 0,
         },
         'warnings': {'process_probe': process_error},
     }
@@ -1472,9 +1561,85 @@ async def api_system_status(request: Request, db=Depends(get_db)):
     return {'ok': True, 'status': _collect_runtime_status(db)}
 
 
+def _tail_log(service: str, lines: int = 100) -> List[str]:
+    """Returns last N lines from a service launcher log file."""
+    log_path = _service_log_path(service)
+    if not os.path.isfile(log_path):
+        return [f'[日志文件不存在: {log_path}]']
+    try:
+        with open(log_path, 'r', encoding='utf-8', errors='replace') as f:
+            all_lines = f.readlines()
+        return [l.rstrip('\n\r') for l in all_lines[-lines:]]
+    except Exception as e:
+        return [f'[读取日志失败: {e}]']
+
+
+@app.get('/api/system/logs/{service}')
+async def api_system_logs(service: str, request: Request, lines: int = Query(100, ge=10, le=500), db=Depends(get_db)):
+    user = get_current_user(request, db)
+    _require_admin_user(user)
+    log_path = _service_log_path(service)
+    return {
+        'ok': True,
+        'service': service,
+        'log_path': log_path,
+        'lines': _tail_log(service, lines),
+    }
+
+
+@app.get('/api/system/logs/{service}/stream')
+async def api_system_logs_stream(service: str, request: Request, db=Depends(get_db)):
+    """SSE endpoint that streams log file updates in real-time."""
+    user = get_current_user(request, db)
+    _require_admin_user(user)
+    log_path = _service_log_path(service)
+
+    async def event_generator():
+        last_size = 0
+        try:
+            if os.path.isfile(log_path):
+                last_size = os.path.getsize(log_path)
+                with open(log_path, 'r', encoding='utf-8', errors='replace') as f:
+                    initial = f.read()
+                yield f'data: {json.dumps({"type": "init", "content": initial, "path": log_path})}\n\n'
+            else:
+                yield f'data: {json.dumps({"type": "init", "content": "", "path": log_path})}\n\n'
+
+            while True:
+                try:
+                    if os.path.isfile(log_path):
+                        current_size = os.path.getsize(log_path)
+                        if current_size > last_size:
+                            with open(log_path, 'r', encoding='utf-8', errors='replace') as f:
+                                f.seek(last_size)
+                                new_content = f.read()
+                            last_size = current_size
+                            if new_content:
+                                yield f'data: {json.dumps({"type": "delta", "content": new_content})}\n\n'
+                        elif current_size < last_size:
+                            last_size = 0
+                            with open(log_path, 'r', encoding='utf-8', errors='replace') as f:
+                                content = f.read()
+                                last_size = os.path.getsize(log_path)
+                            yield f'data: {json.dumps({"type": "init", "content": content, "path": log_path})}\n\n'
+                except GeneratorExit:
+                    break
+                except Exception:
+                    pass
+                await asyncio.sleep(0.5)
+        except GeneratorExit:
+            pass
+
+    return StreamingResponse(event_generator(), media_type='text/event-stream', headers={
+        'Cache-Control': 'no-cache',
+        'Connection': 'keep-alive',
+        'X-Accel-Buffering': 'no',
+    })
+
+
 @app.post('/api/system/start-all')
 async def api_system_start_all(request: Request, db=Depends(get_db)):
-    """Starts MinIO and crawler in order with runtime verification."""
+    """Starts proxy (if configured) then crawler."""
     user = get_current_user(request, db)
     _require_admin_user(user)
 
@@ -1485,22 +1650,19 @@ async def api_system_start_all(request: Request, db=Depends(get_db)):
         errors: List[str] = []
         launch_logs: Dict[str, str] = {}
 
-        if not before['services']['minio']['running']:
+        # Step 1: Proxy
+        if not before['services']['proxy']['running']:
             try:
-                log_path = _start_local_service_script(_service_script_name('minio'))
-                launch_logs['minio'] = log_path
-                actions.append('minio_start_triggered')
+                log_path = _start_local_service_script(_service_script_name('proxy'))
+                launch_logs['proxy'] = log_path
+                actions.append('proxy_start_triggered')
             except Exception as exc:
-                errors.append(f'minio: {exc}')
+                errors.append(f'proxy: {exc}')
         else:
-            actions.append('minio_already_running')
+            actions.append('proxy_already_running')
 
-        after_minio = _wait_for_service_state(db, 'minio', expected_running=True, timeout_sec=SERVICE_START_TIMEOUT_SEC)
-        if 'minio_start_triggered' in actions and not after_minio['services']['minio']['running']:
-            log_path = launch_logs.get('minio', '-')
-            errors.append(f'minio: 已触发启动但未检测到进程，请检查日志 {log_path}')
-
-        if not after_minio['services']['crawler']['running']:
+        # Step 2: Crawler
+        if not before['services']['crawler']['running']:
             try:
                 _validate_service_start_env('crawler')
                 log_path = _start_local_service_script(_service_script_name('crawler'))
@@ -1511,7 +1673,7 @@ async def api_system_start_all(request: Request, db=Depends(get_db)):
         else:
             actions.append('crawler_already_running')
 
-        after = _wait_for_service_state(db, 'crawler', expected_running=True, timeout_sec=SERVICE_START_TIMEOUT_SEC)
+        after = _collect_runtime_status(db)
         if 'crawler_start_triggered' in actions and not after['services']['crawler']['running']:
             log_path = launch_logs.get('crawler', '-')
             errors.append(f'crawler: 已触发启动但未检测到进程，请检查日志 {log_path}')
@@ -1706,6 +1868,90 @@ async def api_update_user_status(
     return {'ok': True}
 
 
+@app.post('/api/users/{user_id}/update')
+async def api_update_user(
+    user_id: int,
+    request: Request,
+    username: Optional[str] = Form(None),
+    role: Optional[str] = Form(None),
+    full_name: Optional[str] = Form(None),
+    email: Optional[str] = Form(None),
+    db=Depends(get_db),
+):
+    user = get_current_user(request, db)
+    _require_admin_user(user)
+
+    target = db_execute(
+        db, 'SELECT id, username FROM reviewers WHERE id = %s LIMIT 1',
+        (user_id,),
+    ).fetchone()
+    if not target:
+        raise HTTPException(404, '用户不存在')
+
+    updates = []
+    params = []
+    if username is not None:
+        nu = username.strip().lower()
+        if len(nu) < 3:
+            raise HTTPException(400, '用户名至少 3 个字符')
+        exists = db_execute(
+            db, 'SELECT id FROM reviewers WHERE LOWER(username) = %s AND id != %s LIMIT 1',
+            (nu, user_id),
+        ).fetchone()
+        if exists:
+            raise HTTPException(400, '用户名已存在')
+        updates.append('username = %s')
+        params.append(nu)
+    if role is not None:
+        nr = role.strip().lower()
+        if nr not in {'admin', 'user'}:
+            raise HTTPException(400, '角色仅支持 admin 或 user')
+        if user_id == user['id'] and nr != 'admin' and is_admin(user):
+            raise HTTPException(400, '不能将自己的管理员角色降级')
+        updates.append('role = %s')
+        params.append(nr)
+    if full_name is not None:
+        updates.append('full_name = %s')
+        params.append(full_name.strip() or None)
+    if email is not None:
+        updates.append('email = %s')
+        params.append(email.strip() or None)
+
+    if updates:
+        updates.append('updated_at = NOW()')
+        params.append(user_id)
+        db_execute(db, f'UPDATE reviewers SET {", ".join(updates)} WHERE id = %s', params)
+        db.commit()
+
+    return {'ok': True}
+
+
+@app.post('/api/users/{user_id}/delete')
+async def api_delete_user(
+    user_id: int,
+    request: Request,
+    db=Depends(get_db),
+):
+    user = get_current_user(request, db)
+    _require_admin_user(user)
+
+    if user_id == user['id']:
+        raise HTTPException(400, '不能删除当前登录账号')
+
+    target = db_execute(
+        db, 'SELECT id, role FROM reviewers WHERE id = %s LIMIT 1',
+        (user_id,),
+    ).fetchone()
+    if not target:
+        raise HTTPException(404, '用户不存在')
+
+    db_execute(db, 'DELETE FROM audit_logs WHERE reviewer_id = %s', (user_id,))
+    db_execute(db, 'DELETE FROM user_crawler_settings WHERE user_id = %s', (user_id,))
+    db_execute(db, 'DELETE FROM reviewers WHERE id = %s', (user_id,))
+    db.commit()
+    return {'ok': True}
+
+
 @app.post('/api/account/password')
 async def api_change_self_password(
     request: Request,
@@ -1732,6 +1978,30 @@ async def api_change_self_password(
         (hash_password(new_password), user['id']),
     )
     db.commit()
+    return {'ok': True}
+
+
+@app.post('/api/account/profile')
+async def api_update_self_profile(
+    request: Request,
+    full_name: Optional[str] = Form(None),
+    email: Optional[str] = Form(None),
+    db=Depends(get_db),
+):
+    user = get_current_user(request, db)
+    updates = []
+    params = []
+    if full_name is not None:
+        updates.append('full_name = %s')
+        params.append(full_name.strip() or None)
+    if email is not None:
+        updates.append('email = %s')
+        params.append(email.strip() or None)
+    if updates:
+        updates.append('updated_at = NOW()')
+        params.append(user['id'])
+        db_execute(db, f'UPDATE reviewers SET {", ".join(updates)} WHERE id = %s', params)
+        db.commit()
     return {'ok': True}
 
 
@@ -1794,6 +2064,276 @@ async def api_update_crawler_settings(
     )
     db.commit()
     return {'ok': True, 'channels': len(channels)}
+
+
+# ─── Telegram QR Login ───────────────────────────────────────────────
+
+
+def _resolve_tg_creds(user: Dict[str, Any], db) -> tuple:
+    """Resolve TG_API_ID and TG_API_HASH — env override > DB > error."""
+    api_id = os.getenv('TG_API_ID')
+    api_hash = os.getenv('TG_API_HASH')
+
+    if not api_id or not api_hash:
+        row = db_execute(
+            db,
+            'SELECT tg_api_id, tg_api_hash FROM user_crawler_settings WHERE user_id = %s',
+            (user['id'],),
+        ).fetchone()
+        if row:
+            api_id = row['tg_api_id']
+            api_hash = row['tg_api_hash']
+
+    if api_id:
+        api_id = int(api_id)
+
+    if not api_id or not api_hash:
+        raise HTTPException(400, '服务端未配置 TG_API_ID 和 TG_API_HASH，请在 .env.local 中设置')
+
+    return api_id, api_hash
+
+
+def _build_tg_proxy(user: Dict[str, Any], db) -> Optional[tuple]:
+    """Build a Telethon-compatible proxy tuple from user settings or env fallback."""
+    ptype_str = None
+    host = None
+    port = None
+    username = None
+    password = None
+
+    row = db_execute(
+        db,
+        'SELECT tg_proxy_type, tg_proxy_host, tg_proxy_port, tg_proxy_username, tg_proxy_password FROM user_crawler_settings WHERE user_id = %s',
+        (user['id'],),
+    ).fetchone()
+    if row:
+        ptype_str = (row['tg_proxy_type'] or '').strip().lower() or None
+        host = row['tg_proxy_host'] or None
+        port = int(row['tg_proxy_port']) if row['tg_proxy_port'] else None
+        username = row['tg_proxy_username'] or None
+        password = row['tg_proxy_password'] or None
+
+    if not host or not port:
+        ptype_str = (os.getenv('TG_PROXY_TYPE') or '').strip().lower() or None
+        host = os.getenv('TG_PROXY_HOST') or None
+        port_str = os.getenv('TG_PROXY_PORT') or None
+        port = int(port_str) if port_str else None
+        username = username or os.getenv('TG_PROXY_USERNAME') or None
+        password = password or os.getenv('TG_PROXY_PASSWORD') or None
+
+    if not host or not port:
+        return None
+    try:
+        import socks
+    except Exception:
+        return None
+    type_map = {'socks5': socks.SOCKS5, 'socks4': socks.SOCKS4, 'http': socks.HTTP}
+    ptype = type_map.get(ptype_str, socks.SOCKS5)
+    return (ptype, host, port, True, username, password)
+
+
+@app.post('/api/tg/qr')
+async def api_tg_qr(request: Request, db=Depends(get_db)):
+    """Initiate QR code login. Returns QR URL and session token."""
+    user = get_current_user(request, db)
+    _require_admin_user(user)
+
+    api_id, api_hash = _resolve_tg_creds(user, db)
+    proxy = _build_tg_proxy(user, db)
+
+    os.makedirs(TG_SESSION_DIR, exist_ok=True)
+    tmp = tempfile.NamedTemporaryFile(dir=TG_SESSION_DIR, suffix='.session', delete=False)
+    tmp_session = tmp.name
+    tmp.close()
+
+    proxies_to_try = [proxy, None] if proxy else [None]
+    client = None
+    last_error = None
+
+    try:
+        for p in proxies_to_try:
+            try:
+                client = TelegramClient(tmp_session, api_id, api_hash, proxy=p)
+                await client.connect()
+                qr_login = await client.qr_login()
+                last_error = None
+                break
+            except Exception as e:
+                last_error = e
+                if client:
+                    try:
+                        await client.disconnect()
+                    except Exception:
+                        pass
+                client = None
+
+        if not client or last_error:
+            raise HTTPException(500, f'连接 Telegram 失败: {last_error}')
+
+        token = str(uuid.uuid4())
+
+        qr_sessions[token] = {
+            'client': client,
+            'qr': qr_login,
+            'started': time.time(),
+            'tmp_session': tmp_session,
+        }
+
+        _cleanup_stale_qr_sessions()
+
+        img = qrcode.make(qr_login.url)
+        buf = BytesIO()
+        img.save(buf, format='PNG')
+        qr_b64 = b64encode(buf.getvalue()).decode()
+
+        return {
+            'ok': True,
+            'qr_url': qr_login.url,
+            'qr_data_url': f'data:image/png;base64,{qr_b64}',
+            'token': token,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        try:
+            os.unlink(tmp_session)
+        except Exception:
+            pass
+        raise HTTPException(500, f'QR 登录初始化失败: {e}')
+
+
+def _cleanup_stale_qr_sessions():
+    """Remove QR login sessions older than 120 seconds."""
+    now = time.time()
+    stale = [k for k, v in qr_sessions.items() if now - v['started'] > 120]
+    for k in stale:
+        try:
+            s = qr_sessions.pop(k, None)
+            if s:
+                asyncio.create_task(s['client'].disconnect())
+                try:
+                    os.unlink(s['tmp_session'])
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+
+@app.get('/api/tg/qr-status/{token}')
+async def api_tg_qr_status(token: str, request: Request, db=Depends(get_db)):
+    """Poll QR login status: waiting / authorized / timeout / error."""
+    user = get_current_user(request, db)
+    _require_admin_user(user)
+
+    session = qr_sessions.get(token)
+    if not session:
+        return {'ok': False, 'status': 'expired', 'message': '会话不存在或已过期，请重新生成二维码'}
+
+    elapsed = time.time() - session['started']
+    if elapsed > 120:
+        await session['client'].disconnect()
+        qr_sessions.pop(token, None)
+        try:
+            os.unlink(session['tmp_session'])
+        except Exception:
+            pass
+        return {'ok': False, 'status': 'timeout', 'message': '二维码已过期（超过 120 秒），请重新生成'}
+
+    try:
+        auth = await session['qr'].wait(1)
+        # User authorized — save session permanently
+        os.makedirs(TG_SESSION_DIR, exist_ok=True)
+        shutil.copy(session['tmp_session'], TG_SESSION_PATH)
+
+        await session['client'].disconnect()
+        qr_sessions.pop(token, None)
+        try:
+            os.unlink(session['tmp_session'])
+        except Exception:
+            pass
+
+        return {'ok': True, 'status': 'authorized', 'message': 'TG 账户授权成功'}
+    except asyncio.TimeoutError:
+        return {'ok': True, 'status': 'waiting'}
+    except tg_errors.PasswordRequiredError:
+        await session['client'].disconnect()
+        qr_sessions.pop(token, None)
+        try:
+            os.unlink(session['tmp_session'])
+        except Exception:
+            pass
+        return {'ok': False, 'status': 'error', 'message': '账户开启了两步验证（2FA），扫码后还需输入密码（当前暂未支持）'}
+    except Exception as e:
+        await session['client'].disconnect()
+        qr_sessions.pop(token, None)
+        try:
+            os.unlink(session['tmp_session'])
+        except Exception:
+            pass
+        return {'ok': False, 'status': 'error', 'message': f'授权失败: {e}'}
+
+
+@app.get('/api/tg/session-status')
+async def api_tg_session_status(request: Request, db=Depends(get_db)):
+    """Check if a valid Telegram session file exists."""
+    user = get_current_user(request, db)
+    _require_admin_user(user)
+
+    if not os.path.isfile(TG_SESSION_PATH):
+        return {'ok': True, 'authorized': False, 'phone': None}
+
+    api_id, api_hash = _resolve_tg_creds(user, db)
+    proxy = _build_tg_proxy(user, db)
+    phone = None
+    valid = False
+    try:
+        client = TelegramClient(str(TG_SESSION_PATH), api_id, api_hash, proxy=proxy)
+        await client.connect()
+        if await client.is_user_authorized():
+            valid = True
+            me = await client.get_me()
+            phone = me.phone if me else None
+        await client.disconnect()
+    except Exception:
+        pass
+
+    return {
+        'ok': True,
+        'authorized': valid,
+        'phone': phone,
+        'session_path': str(TG_SESSION_PATH),
+    }
+
+
+@app.post('/api/tg/logout')
+async def api_tg_logout(request: Request, db=Depends(get_db)):
+    """Delete Telegram session file to force re-login."""
+    user = get_current_user(request, db)
+    _require_admin_user(user)
+
+    # Also try to terminate via Telethon so server-side session is invalidated
+    api_id, api_hash = _resolve_tg_creds(user, db)
+    try:
+        if os.path.isfile(TG_SESSION_PATH):
+            client = TelegramClient(str(TG_SESSION_PATH), api_id, api_hash)
+            await client.connect()
+            if await client.is_user_authorized():
+                await client.log_out()
+            await client.disconnect()
+    except Exception:
+        pass
+
+    # Remove the file
+    session_file = TG_SESSION_PATH
+    journal_file = str(TG_SESSION_PATH) + '-journal'
+    for f in [session_file, journal_file]:
+        try:
+            if os.path.isfile(f):
+                os.unlink(f)
+        except Exception:
+            pass
+
+    return {'ok': True, 'message': 'TG 会话已清除，已从账户登出'}
 
 
 @app.post('/api/messages/{msg_id}/review')
@@ -1961,6 +2501,22 @@ async def update_profile(
     return {'ok': True}
 
 
+@app.get('/api/messages/{msg_id}/media')
+async def api_message_media(msg_id: int, request: Request, db=Depends(get_db)):
+    user = get_current_user(request, db)
+    rows = db_execute(
+        db,
+        """
+        SELECT id, media_type, s3_url, thumb_url, file_size, width, height, mime_type
+        FROM media_files
+        WHERE message_id = %s
+        ORDER BY id
+        """,
+        (msg_id,),
+    ).fetchall()
+    return {'ok': True, 'media': [dict(r) for r in rows]}
+
+
 # ==================== Auth ====================
 
 
@@ -1971,13 +2527,19 @@ async def login_page(request: Request):
 
 @app.post('/login')
 async def do_login(request: Request, username: str = Form(...), password: str = Form(...), db=Depends(get_db)):
+    ip = request.client.host if request.client else 'unknown'
+    _check_login_rate_limit(ip)
+
     normalized_username = (username or '').strip().lower()
     user = db_execute(
         db,
-        'SELECT id, password_hash FROM reviewers WHERE LOWER(username) = LOWER(%s) AND is_active = true',
+        'SELECT id, username, role, password_hash FROM reviewers WHERE LOWER(username) = LOWER(%s) AND is_active = true',
         (normalized_username,),
     ).fetchone()
+
     if not user or not verify_password(password, user['password_hash']):
+        _log_audit_simple(db, 0, 'login_failed', f'failed login for {normalized_username} from {ip}')
+        db.commit()
         return templates.TemplateResponse(
             request=request,
             name='login.html',
@@ -1987,15 +2549,60 @@ async def do_login(request: Request, username: str = Form(...), password: str = 
 
     token = create_token(user['id'])
     response = RedirectResponse(url='/', status_code=302)
-    response.set_cookie(key='session', value=token, httponly=True, max_age=604800)
+    set_auth_cookie(response, token)
+    _log_audit_simple(db, user['id'], 'login', f'login from {ip}')
+    db.commit()
     return response
 
 
 @app.get('/logout')
-async def logout():
+async def logout(request: Request, db=Depends(get_db)):
+    try:
+        user = get_current_user(request, db)
+        _log_audit_simple(db, user['id'], 'logout', 'user logout')
+        db.commit()
+    except Exception:
+        pass
     response = RedirectResponse(url='/login')
-    response.delete_cookie('session')
+    delete_auth_cookie(response)
     return response
+
+
+@app.exception_handler(404)
+async def not_found_handler(request: Request, exc):
+    if request.url.path.startswith('/api/'):
+        return JSONResponse(status_code=404, content={'ok': False, 'detail': '接口不存在'})
+    try:
+        conn = psycopg2.connect(DB_URL)
+        user = get_current_user(request, conn)
+        conn.close()
+    except Exception:
+        user = None
+    return templates.TemplateResponse(
+        request=request,
+        name='error.html',
+        context={'user': user, 'code': 404, 'message': '页面不存在'},
+        status_code=404,
+    )
+
+
+@app.exception_handler(500)
+async def server_error_handler(request: Request, exc):
+    if request.url.path.startswith('/api/'):
+        detail = str(exc.detail) if hasattr(exc, 'detail') else '服务器内部错误'
+        return JSONResponse(status_code=500, content={'ok': False, 'detail': detail})
+    try:
+        conn = psycopg2.connect(DB_URL)
+        user = get_current_user(request, conn)
+        conn.close()
+    except Exception:
+        user = None
+    return templates.TemplateResponse(
+        request=request,
+        name='error.html',
+        context={'user': user, 'code': 500, 'message': '服务器内部错误'},
+        status_code=500,
+    )
 
 
 def _ensure_identity_schema(conn):
