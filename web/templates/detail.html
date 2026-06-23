@@ -159,8 +159,7 @@
                         <input class="form-check-input" type="checkbox" id="r_flagged" {% if msg.is_flagged %}checked{% endif %}>
                         <label class="form-check-label text-danger" for="r_flagged">标记为可疑</label>
                     </div>
-                    <button type="submit" class="btn btn-primary w-100">保存审核</button>
-                    <div id="reviewResult" class="mt-2 small"></div>
+                    <button type="submit" class="btn btn-primary w-100" id="reviewBtn">保存审核</button>
                 </form>
                 <div class="d-flex flex-wrap gap-1 mt-2">
                     <span class="badge bg-secondary" style="cursor:pointer" onclick="addTag('高价值')">高价值</span>
@@ -188,8 +187,7 @@
                         <div class="col-6"><input class="form-control form-control-sm" name="introduction_fee" placeholder="介绍费" value="{{ (profile.introduction_fee if profile else None) or (msg.extracted_json.intro_fee if msg.extracted_json else '') or '' }}"></div>
                         <div class="col-6"><input class="form-control form-control-sm" name="monthly_allowance" placeholder="生活费" value="{{ (profile.monthly_allowance if profile else None) or (msg.extracted_json.monthly_allowance if msg.extracted_json else '') or '' }}"></div>
                     </div>
-                    <button class="btn btn-outline-primary btn-sm w-100 mt-2" type="submit">保存档案修正</button>
-                    <div id="profileResult" class="mt-2 small"></div>
+                    <button class="btn btn-outline-primary btn-sm w-100 mt-2" type="submit" id="profileBtn">保存档案修正</button>
                 </form>
             </div>
         </div>
@@ -201,6 +199,8 @@
 <script>
 async function submitReview(e) {
     e.preventDefault();
+    const btn = document.getElementById('reviewBtn');
+    showLoading(btn);
     const form = e.target;
     const data = new FormData(form);
     data.append('is_flagged', document.getElementById('r_flagged').checked ? 'true' : 'false');
@@ -210,29 +210,31 @@ async function submitReview(e) {
         body: data
     });
 
-    const result = document.getElementById('reviewResult');
+    hideLoading(btn, '保存审核');
     if (res.ok) {
-        result.innerHTML = '<div class="alert alert-success py-1">保存成功</div>';
+        showToast('审核已保存', 'success');
         setTimeout(() => location.reload(), 500);
     } else {
-        result.innerHTML = '<div class="alert alert-danger py-1">保存失败</div>';
+        showToast('保存失败', 'danger');
     }
 }
 
 async function submitProfile(e) {
     e.preventDefault();
+    const btn = document.getElementById('profileBtn');
+    showLoading(btn);
     const data = new FormData(e.target);
     const res = await fetch('/api/messages/{{ msg.id }}/profile', {
         method: 'POST',
         body: data,
     });
 
-    const result = document.getElementById('profileResult');
+    hideLoading(btn, '保存档案修正');
     if (res.ok) {
-        result.innerHTML = '<div class="alert alert-success py-1">档案已更新</div>';
+        showToast('档案已更新', 'success');
         setTimeout(() => location.reload(), 600);
     } else {
-        result.innerHTML = '<div class="alert alert-danger py-1">档案更新失败</div>';
+        showToast('档案更新失败', 'danger');
     }
 }
 

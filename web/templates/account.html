@@ -1,21 +1,41 @@
 {% extends "base.html" %}
 {% block title %}我的账户 - TG Crawler{% endblock %}
 {% block content %}
-<div class="row justify-content-center">
+<div class="navbar-page-title"><i class="bi bi-person-gear me-2"></i>我的账户</div>
+
+<div class="row g-3">
     <div class="col-12 col-lg-6">
         <div class="card mb-3">
+            <div class="card-header"><i class="bi bi-info-circle me-1"></i>账户信息</div>
             <div class="card-body">
-                <h5 class="mb-3">账户信息</h5>
-                <div class="small mb-1"><strong>用户名:</strong> {{ user.username }}</div>
-                <div class="small mb-1"><strong>角色:</strong> {{ user.role }}</div>
-                <div class="small mb-1"><strong>姓名:</strong> {{ user.full_name or '-' }}</div>
-                <div class="small"><strong>邮箱:</strong> {{ user.email or '-' }}</div>
+                <form id="profileForm" onsubmit="saveProfile(event)">
+                    <div class="mb-2">
+                        <label class="form-label small fw-bold">用户名</label>
+                        <input id="profUsername" class="form-control form-control-sm" value="{{ user.username }}" disabled>
+                    </div>
+                    <div class="mb-2">
+                        <label class="form-label small fw-bold">角色</label>
+                        <input class="form-control form-control-sm" value="{{ user.role }}" disabled>
+                    </div>
+                    <div class="mb-2">
+                        <label class="form-label small fw-bold">姓名</label>
+                        <input id="profFullName" class="form-control form-control-sm" value="{{ user.full_name }}">
+                    </div>
+                    <div class="mb-2">
+                        <label class="form-label small fw-bold">邮箱</label>
+                        <input id="profEmail" class="form-control form-control-sm" value="{{ user.email }}" type="email">
+                    </div>
+                    <button type="submit" class="btn btn-sm btn-primary">保存资料</button>
+                </form>
+                <div id="profileResult" class="small mt-2"></div>
             </div>
         </div>
+    </div>
 
-        <div class="card">
+    <div class="col-12 col-lg-6">
+        <div class="card mb-3">
+            <div class="card-header"><i class="bi bi-lock me-1"></i>修改密码</div>
             <div class="card-body">
-                <h5 class="mb-3">修改密码</h5>
                 <form onsubmit="changePassword(event)">
                     <div class="mb-2">
                         <label class="form-label small fw-bold">旧密码</label>
@@ -23,9 +43,9 @@
                     </div>
                     <div class="mb-2">
                         <label class="form-label small fw-bold">新密码（至少 6 位）</label>
-                        <input id="newPwd" type="password" class="form-control" required>
+                        <input id="newPwd" type="password" class="form-control" required minlength="6">
                     </div>
-                    <button type="submit" class="btn btn-primary">保存</button>
+                    <button type="submit" class="btn btn-sm btn-primary">修改密码</button>
                 </form>
                 <div id="pwdResult" class="small mt-2"></div>
             </div>
@@ -36,20 +56,38 @@
 
 {% block extra_js %}
 <script>
+async function saveProfile(event) {
+    event.preventDefault();
+    const btn = event.target.querySelector('button[type="submit"]');
+    showLoading(btn);
+    const fd = new FormData();
+    fd.append('full_name', document.getElementById('profFullName').value);
+    fd.append('email', document.getElementById('profEmail').value);
+    const resp = await fetch('/api/account/profile', {method: 'POST', body: fd});
+    const payload = await resp.json();
+    hideLoading(btn, '保存资料');
+    if (!resp.ok || !payload.ok) {
+        showToast(payload.detail || '保存失败', 'danger');
+        return;
+    }
+    showToast('资料已更新', 'success');
+}
+
 async function changePassword(event) {
     event.preventDefault();
+    const btn = event.target.querySelector('button[type="submit"]');
+    showLoading(btn);
     const fd = new FormData();
     fd.append('old_password', document.getElementById('oldPwd').value);
     fd.append('new_password', document.getElementById('newPwd').value);
-
     const resp = await fetch('/api/account/password', {method: 'POST', body: fd});
     const payload = await resp.json();
-    const el = document.getElementById('pwdResult');
+    hideLoading(btn, '修改密码');
     if (!resp.ok || !payload.ok) {
-        el.innerHTML = `<span class="text-danger">${payload.detail || '修改失败'}</span>`;
+        showToast(payload.detail || '修改失败', 'danger');
         return;
     }
-    el.innerHTML = '<span class="text-success">密码修改成功</span>';
+    showToast('密码修改成功', 'success');
     document.getElementById('oldPwd').value = '';
     document.getElementById('newPwd').value = '';
 }

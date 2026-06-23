@@ -54,40 +54,240 @@
 
                     <div class="d-flex justify-content-between align-items-center mt-2">
                         <span class="small text-muted">最近更新：{{ cfg.updated_at or '-' }}</span>
-                        <button class="btn btn-sm btn-primary" type="submit">保存配置</button>
+                        <button class="btn btn-sm btn-primary" type="submit" id="settingsBtn">保存配置</button>
                     </div>
                 </form>
-
-                <div id="settingsResult" class="small mt-2"></div>
             </div>
         </div>
+
+        <div class="card mb-3">
+            <div class="card-body">
+                <h5 class="mb-2">Telegram 账户授权</h5>
+                <div class="small text-muted mb-3">扫码授权 TG 账户后，Crawler 可使用该账户采集频道消息。</div>
+
+                <div id="tgAuthStatus" class="mb-3">
+                    <div class="d-flex align-items-center gap-2">
+                        <span>状态：</span>
+                        <span id="tgAuthBadge" class="badge bg-secondary">检测中...</span>
+                        <span id="tgPhoneDisplay" class="small text-muted"></span>
+                    </div>
+                </div>
+
+                <div id="tgQrArea" style="display:none">
+                    <div class="d-flex flex-wrap align-items-start gap-4">
+                        <div id="qrcodeContainer" class="border rounded p-2 bg-white">
+                            <img id="qrImage" src="" alt="QR Code" width="220" height="220" style="display:block">
+                        </div>
+                        <div>
+                            <div class="fw-bold mb-1">请使用 Telegram 扫码</div>
+                            <div class="small text-muted mb-2">打开 Telegram → 设置 → 设备 → 扫码二维码</div>
+                            <div id="tgQrStatus" class="small text-warning">等待扫码...</div>
+                            <div class="mt-2">
+                                <button class="btn btn-sm btn-outline-secondary" onclick="cancelQrLogin()">取消</button>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="mt-2">
+                        <div class="progress" style="height:4px">
+                            <div id="qrProgressBar" class="progress-bar" role="progressbar" style="width:100%"></div>
+                        </div>
+                        <div id="qrTimer" class="small text-muted mt-1">120 秒后过期</div>
+                    </div>
+                </div>
+
+                <div id="tgAuthActions" class="d-flex gap-2">
+                    <button id="btnQrLogin" class="btn btn-sm btn-primary" onclick="startQrLogin()">扫码授权</button>
+                    <button id="btnLogoutTg" class="btn btn-sm btn-outline-danger" onclick="tgLogout()" style="display:none">退出登录</button>
+                    <button id="btnRefreshTg" class="btn btn-sm btn-outline-secondary" onclick="checkTgSession()">刷新状态</button>
+                </div>
+            </div>
+        </div>
+
     </div>
 </div>
 {% endblock %}
 
 {% block extra_js %}
 <script>
-async function saveSettings(event) {
-    event.preventDefault();
-    const fd = new FormData();
-    fd.append('tg_api_id', document.getElementById('tgApiId').value);
-    fd.append('tg_api_hash', document.getElementById('tgApiHash').value);
-    fd.append('tg_phone', document.getElementById('tgPhone').value);
-    fd.append('tg_proxy_type', document.getElementById('proxyType').value);
-    fd.append('tg_proxy_host', document.getElementById('proxyHost').value);
-    fd.append('tg_proxy_port', document.getElementById('proxyPort').value);
-    fd.append('tg_proxy_username', document.getElementById('proxyUser').value);
-    fd.append('tg_proxy_password', document.getElementById('proxyPass').value);
-    fd.append('target_channels', document.getElementById('targetChannels').value);
-
-    const resp = await fetch('/api/settings/crawler', {method: 'POST', body: fd});
-    const payload = await resp.json();
-    const el = document.getElementById('settingsResult');
-    if (!resp.ok || !payload.ok) {
-        el.innerHTML = `<span class="text-danger">${payload.detail || '保存失败'}</span>`;
-        return;
+async function saveSettings(ev) {
+    ev.preventDefault();
+    const btn = document.getElementById('settingsBtn');
+    showLoading(btn);
+    try {
+        const fd = new FormData();
+        fd.set('tg_api_id', document.getElementById('tgApiId').value.trim());
+        fd.set('tg_api_hash', document.getElementById('tgApiHash').value.trim());
+        fd.set('tg_phone', document.getElementById('tgPhone').value.trim());
+        fd.set('tg_proxy_type', document.getElementById('proxyType').value.trim());
+        fd.set('tg_proxy_host', document.getElementById('proxyHost').value.trim());
+        fd.set('tg_proxy_port', document.getElementById('proxyPort').value.trim());
+        fd.set('tg_proxy_username', document.getElementById('proxyUser').value.trim());
+        fd.set('tg_proxy_password', document.getElementById('proxyPass').value.trim());
+        fd.set('target_channels', document.getElementById('targetChannels').value);
+        const resp = await fetch('/api/settings/crawler', {method: 'POST', body: fd});
+        const data = await resp.json();
+        hideLoading(btn, '保存配置');
+        if (!resp.ok || !data.ok) {
+            showToast(data.detail || data.message || '保存失败', 'danger');
+            return;
+        }
+        showToast('配置已保存，目标频道 ' + data.channels + ' 个', 'success');
+    } catch (e) {
+        hideLoading(btn, '保存配置');
+        showToast('请求失败: ' + e.message, 'danger');
     }
-    el.innerHTML = `<span class="text-success">保存成功，频道数量 ${payload.channels}</span>`;
 }
+
+let qrToken = null;
+let qrPoller = null;
+let qrTimer = null;
+let qrStartTime = null;
+
+async function checkTgSession() {
+    try {
+        const resp = await fetch('/api/tg/session-status');
+        const data = await resp.json();
+        if (!resp.ok) {
+            document.getElementById('tgAuthBadge').className = 'badge bg-secondary';
+            document.getElementById('tgAuthBadge').textContent = '未知';
+            return;
+        }
+        const badge = document.getElementById('tgAuthBadge');
+        const phoneEl = document.getElementById('tgPhoneDisplay');
+        if (data.authorized) {
+            badge.className = 'badge bg-success';
+            badge.textContent = '已授权';
+            phoneEl.textContent = data.phone ? '(' + data.phone + ')' : '';
+            document.getElementById('btnLogoutTg').style.display = 'inline-block';
+        } else {
+            badge.className = 'badge bg-secondary';
+            badge.textContent = '未授权';
+            phoneEl.textContent = '';
+            document.getElementById('btnLogoutTg').style.display = 'none';
+        }
+    } catch (e) {
+        showToast('检测 TG 会话状态失败: ' + e.message, 'danger');
+    }
+}
+
+async function startQrLogin() {
+    const btn = document.getElementById('btnQrLogin');
+    showLoading(btn);
+    try {
+        const resp = await fetch('/api/tg/qr', {method: 'POST'});
+        const data = await resp.json();
+        hideLoading(btn, '扫码授权');
+        if (!resp.ok || !data.ok) {
+            showToast(data.message || data.detail || '生成二维码失败', 'danger');
+            return;
+        }
+
+        qrToken = data.token;
+        qrStartTime = Date.now();
+
+        document.getElementById('qrImage').src = data.qr_data_url;
+        document.getElementById('tgQrArea').style.display = 'block';
+        document.getElementById('tgAuthActions').querySelectorAll('button').forEach(b => b.disabled = true);
+
+        updateQrTimer();
+        qrTimer = setInterval(updateQrTimer, 1000);
+        pollQrStatus();
+        qrPoller = setInterval(pollQrStatus, 2000);
+    } catch (e) {
+        hideLoading(btn, '扫码授权');
+        showToast('请求失败: ' + e.message, 'danger');
+    }
+}
+
+function updateQrTimer() {
+    const elapsed = Math.floor((Date.now() - qrStartTime) / 1000);
+    const remaining = Math.max(0, 120 - elapsed);
+    const pct = (remaining / 120) * 100;
+    document.getElementById('qrProgressBar').style.width = pct + '%';
+    document.getElementById('qrTimer').textContent = remaining + ' 秒后过期';
+    if (remaining <= 20) {
+        document.getElementById('qrProgressBar').className = 'progress-bar bg-danger';
+    } else if (remaining <= 60) {
+        document.getElementById('qrProgressBar').className = 'progress-bar bg-warning';
+    }
+}
+
+async function pollQrStatus() {
+    if (!qrToken) return;
+    try {
+        const resp = await fetch('/api/tg/qr-status/' + qrToken);
+        const data = await resp.json();
+        const statusEl = document.getElementById('tgQrStatus');
+
+        if (data.status === 'authorized') {
+            statusEl.className = 'small text-success fw-bold';
+            statusEl.textContent = '✓ 授权成功！';
+            stopQrPolling();
+            showToast('TG 账户授权成功', 'success');
+            checkTgSession();
+            // Re-enable buttons
+            document.getElementById('tgAuthActions').querySelectorAll('button').forEach(b => b.disabled = false);
+            document.getElementById('btnQrLogin').disabled = false;
+            return;
+        }
+
+        if (data.status === 'waiting') {
+            statusEl.className = 'small text-warning';
+            statusEl.textContent = '等待扫码...';
+            return;
+        }
+
+        // Error / timeout / expired
+        statusEl.className = 'small text-danger';
+        statusEl.textContent = data.message || '授权失败';
+        stopQrPolling();
+        showToast(data.message || '授权失败', 'danger');
+        document.getElementById('tgAuthActions').querySelectorAll('button').forEach(b => b.disabled = false);
+        document.getElementById('btnQrLogin').disabled = false;
+    } catch (e) {
+        // Ignore poll errors
+    }
+}
+
+function stopQrPolling() {
+    if (qrPoller) { clearInterval(qrPoller); qrPoller = null; }
+    if (qrTimer) { clearInterval(qrTimer); qrTimer = null; }
+    qrToken = null;
+}
+
+function cancelQrLogin() {
+    stopQrPolling();
+    document.getElementById('tgQrArea').style.display = 'none';
+    document.getElementById('tgQrStatus').className = 'small text-warning';
+    document.getElementById('tgQrStatus').textContent = '等待扫码...';
+    document.getElementById('qrProgressBar').className = 'progress-bar';
+    document.getElementById('qrProgressBar').style.width = '100%';
+    document.getElementById('qrTimer').textContent = '120 秒后过期';
+    document.getElementById('tgAuthActions').querySelectorAll('button').forEach(b => b.disabled = false);
+    document.getElementById('btnQrLogin').disabled = false;
+}
+
+async function tgLogout() {
+    if (!confirm('确定退出 Telegram 登录？Crawler 需要重新授权才能采集。')) return;
+    const btn = document.getElementById('btnLogoutTg');
+    showLoading(btn);
+    try {
+        const resp = await fetch('/api/tg/logout', {method: 'POST'});
+        const data = await resp.json();
+        hideLoading(btn, '退出登录');
+        if (!resp.ok || !data.ok) {
+            showToast(data.message || '退出登录失败', 'danger');
+            return;
+        }
+        showToast(data.message || '已退出 TG 登录', 'success');
+        checkTgSession();
+    } catch (e) {
+        hideLoading(btn, '退出登录');
+        showToast('请求失败: ' + e.message, 'danger');
+    }
+}
+
+// Init
+checkTgSession();
 </script>
 {% endblock %}

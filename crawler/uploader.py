@@ -1,40 +1,59 @@
 import os
 import mimetypes
+import logging
 import boto3
 from botocore.exceptions import ClientError
 from pathlib import Path
 from PIL import Image
 import io
-import json
 
-class MinIOUploader:
+LOGGER = logging.getLogger(__name__)
+
+
+class S3Uploader:
     def __init__(self):
+        endpoint = os.getenv('S3_ENDPOINT', '').strip() or None
         self.client = boto3.client(
             's3',
-            endpoint_url=os.getenv('S3_ENDPOINT', 'http://localhost:9000'),
-            aws_access_key_id=os.getenv('S3_ACCESS_KEY', 'minioadmin'),
-            aws_secret_access_key=os.getenv('S3_SECRET_KEY', 'minioadmin'),
-            region_name='us-east-1'
+            endpoint_url=endpoint,
+            aws_access_key_id=os.getenv('S3_ACCESS_KEY') or None,
+            aws_secret_access_key=os.getenv('S3_SECRET_KEY') or None,
+            region_name=os.getenv('S3_REGION', 'ap-east-1')
         )
-        self.bucket = os.getenv('S3_BUCKET', 'tg-media')
-        self.public_endpoint = os.getenv('S3_PUBLIC_ENDPOINT', os.getenv('S3_ENDPOINT', 'http://localhost:9000')).rstrip('/')
+        self.bucket = os.getenv('S3_BUCKET', 'tg-crawler-media-ffe95227')
+        self._init_public_url()
+        self._ensure_bucket()
 
+    def _ensure_bucket(self):
         try:
             self.client.head_bucket(Bucket=self.bucket)
-        except ClientError:
-            self.client.create_bucket(Bucket=self.bucket)
-            self.client.put_bucket_policy(
-                Bucket=self.bucket,
-                Policy=json.dumps({
-                    "Version": "2012-10-17",
-                    "Statement": [{
-                        "Effect": "Allow",
-                        "Principal": "*",
-                        "Action": ["s3:GetObject"],
-                        "Resource": f"arn:aws:s3:::{self.bucket}/*"
-                    }]
-                })
-            )
+        except ClientError as e:
+            code = e.response['Error']['Code']
+            if code == '404':
+                try:
+                    self.client.create_bucket(Bucket=self.bucket)
+                    LOGGER.info("Created bucket: %s", self.bucket)
+                except ClientError as ce:
+                    LOGGER.warning("Bucket '%s' not found and could not be created: %s", self.bucket, ce)
+            else:
+                LOGGER.warning("Bucket check failed (code=%s): %s", code, e)
+        except Exception as e:
+            LOGGER.warning("Unable to verify bucket '%s': %s. Proceeding optimistically.", self.bucket, e)
+
+    def _init_public_url(self):
+        explicit = os.getenv('S3_PUBLIC_ENDPOINT', '').strip()
+        if explicit:
+            self.public_url_base = explicit.rstrip('/')
+            return
+        endpoint = os.getenv('S3_ENDPOINT', '').strip()
+        if not endpoint or 'amazonaws.com' in endpoint:
+            region = os.getenv('S3_REGION', 'ap-east-1')
+            self.public_url_base = f"https://{self.bucket}.s3.{region}.amazonaws.com"
+        else:
+            self.public_url_base = f"{endpoint.rstrip('/')}/{self.bucket}"
+
+    def _public_url(self, key: str) -> str:
+        return f"{self.public_url_base}/{key}"
 
     def upload_media(self, local_path: str, channel: str, message_id: int, seq: int = 0) -> dict:
         ext = Path(local_path).suffix or '.bin'
@@ -61,15 +80,14 @@ class MinIOUploader:
                         Body=thumb_buffer, ContentType='image/jpeg'
                     )
             except Exception as e:
-                print(f"Thumb fail {local_path}: {e}")
+                LOGGER.warning("Thumbnail failed for %s: %s", local_path, e)
                 thumb_key = None
 
-        base = self.public_endpoint
         return {
             's3_key': s3_key,
-            's3_url': f"{base}/{self.bucket}/{s3_key}",
+            's3_url': self._public_url(s3_key),
             'thumb_key': thumb_key,
-            'thumb_url': f"{base}/{self.bucket}/{thumb_key}" if thumb_key else None,
+            'thumb_url': self._public_url(thumb_key) if thumb_key else None,
         }
 
     def upload_photo(self, local_path: str, channel: str, message_id: int, seq: int = 0) -> dict:

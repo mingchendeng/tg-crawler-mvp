@@ -1,13 +1,10 @@
 {% extends "base.html" %}
 {% block title %}用户管理 - TG Crawler{% endblock %}
 {% block content %}
-<div class="d-flex justify-content-between align-items-center mb-3">
-    <h5 class="mb-0">用户管理</h5>
-    <span class="small text-muted">仅管理员可见</span>
-</div>
+<div class="navbar-page-title"><i class="bi bi-person-badge me-2"></i>用户管理</div>
 
 <div class="card mb-3">
-    <div class="card-header fw-bold">创建用户</div>
+    <div class="card-header"><i class="bi bi-plus-circle me-1"></i>创建用户</div>
     <div class="card-body">
         <form class="row g-2" onsubmit="createUser(event)">
             <div class="col-md-2">
@@ -33,6 +30,13 @@
             </div>
         </form>
         <div id="createResult" class="small mt-2"></div>
+    </div>
+</div>
+
+<div class="card mb-3">
+    <div class="card-body py-2 d-flex justify-content-between align-items-center">
+        <span class="small text-muted">共 {{ rows|length }} 个用户</span>
+        <input type="text" id="userSearch" class="form-control form-control-sm" style="width:260px" placeholder="搜索用户名、姓名、邮箱..." oninput="filterUsers(this.value)">
     </div>
 </div>
 
@@ -65,12 +69,14 @@
                     <td>{% if row.must_change_password %}<span class="badge bg-warning text-dark">yes</span>{% else %}<span class="badge bg-light text-dark">no</span>{% endif %}</td>
                     <td class="small">{{ row.created_at }}</td>
                     <td>
-                        <div class="d-flex gap-2">
-                            <button class="btn btn-sm btn-outline-primary" onclick="resetPassword({{ row.id }}, '{{ row.username }}')">重置密码</button>
+                        <div class="d-flex gap-1 flex-wrap">
+                            <button class="btn btn-sm btn-outline-primary" onclick="resetPassword({{ row.id | tojson }}, {{ row.username | tojson }})">重置密码</button>
+                            <button class="btn btn-sm btn-outline-info" data-bs-toggle="modal" data-bs-target="#editModal" onclick="prepareEdit({{ row.id | tojson }}, {{ row.username | tojson }}, {{ row.role | tojson }}, {{ (row.full_name or '') | tojson }}, {{ (row.email or '') | tojson }})">编辑</button>
                             {% if row.id != user.id %}
-                            <button class="btn btn-sm {% if row.is_active %}btn-outline-danger{% else %}btn-outline-success{% endif %}" onclick="toggleStatus({{ row.id }}, {{ 'false' if row.is_active else 'true' }})">
+                            <button class="btn btn-sm {% if row.is_active %}btn-outline-danger{% else %}btn-outline-success{% endif %}" onclick="toggleStatus({{ row.id | tojson }}, {{ 'false' if row.is_active else 'true' }})">
                                 {% if row.is_active %}禁用{% else %}启用{% endif %}
                             </button>
+                            <button class="btn btn-sm btn-outline-danger" onclick="deleteUser({{ row.id | tojson }}, {{ row.username | tojson }})">删除</button>
                             {% endif %}
                         </div>
                     </td>
@@ -82,9 +88,55 @@
 </div>
 
 <div id="userActionResult" class="small mt-2"></div>
+
+<!-- Edit Modal -->
+<div class="modal fade" id="editModal" tabindex="-1">
+  <div class="modal-dialog modal-sm modal-dialog-centered">
+    <div class="modal-content">
+      <div class="modal-header"><h6 class="modal-title">编辑用户</h6><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+      <div class="modal-body">
+        <form id="editForm">
+          <input type="hidden" id="editUserId">
+          <div class="mb-2">
+            <label class="form-label small fw-bold">用户名</label>
+            <input id="editUsername" class="form-control form-control-sm" required>
+          </div>
+          <div class="mb-2">
+            <label class="form-label small fw-bold">角色</label>
+            <select id="editRole" class="form-select form-select-sm">
+              <option value="user">普通用户</option>
+              <option value="admin">管理员</option>
+            </select>
+          </div>
+          <div class="mb-2">
+            <label class="form-label small fw-bold">姓名</label>
+            <input id="editFullName" class="form-control form-control-sm">
+          </div>
+          <div class="mb-2">
+            <label class="form-label small fw-bold">邮箱</label>
+            <input id="editEmail" class="form-control form-control-sm" type="email">
+          </div>
+        </form>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-sm btn-secondary" data-bs-dismiss="modal">取消</button>
+        <button class="btn btn-sm btn-primary" onclick="saveEdit()">保存</button>
+      </div>
+    </div>
+  </div>
+</div>
 {% endblock %}
 
 {% block extra_js %}
+<script>
+function filterUsers(query) {
+    const q = query.toLowerCase();
+    document.querySelectorAll('table tbody tr').forEach((row) => {
+        const text = row.textContent.toLowerCase();
+        row.style.display = text.includes(q) ? '' : 'none';
+    });
+}
+</script>
 <script>
 function showResult(id, ok, text) {
     document.getElementById(id).innerHTML = `<span class="${ok ? 'text-success' : 'text-danger'}">${text}</span>`;
@@ -92,6 +144,8 @@ function showResult(id, ok, text) {
 
 async function createUser(event) {
     event.preventDefault();
+    const btn = event.target.querySelector('button[type="submit"]');
+    showLoading(btn);
     const fd = new FormData();
     fd.append('username', document.getElementById('newUsername').value);
     fd.append('password', document.getElementById('newPassword').value);
@@ -102,42 +156,81 @@ async function createUser(event) {
 
     const resp = await fetch('/api/users', {method: 'POST', body: fd});
     const payload = await resp.json();
+    hideLoading(btn, '创建');
     if (!resp.ok || !payload.ok) {
         showResult('createResult', false, payload.detail || '创建失败');
         return;
     }
-    showResult('createResult', true, `创建成功，用户ID=${payload.id}`);
+    showToast('用户创建成功', 'success');
     setTimeout(() => location.reload(), 400);
 }
 
 async function toggleStatus(userId, active) {
+    if (!confirm(`确定${active ? '启用' : '禁用'}该用户？`)) return;
     const fd = new FormData();
     fd.append('is_active', active ? 'true' : 'false');
     const resp = await fetch(`/api/users/${userId}/status`, {method: 'POST', body: fd});
     const payload = await resp.json();
     if (!resp.ok || !payload.ok) {
-        showResult('userActionResult', false, payload.detail || '更新状态失败');
+        showToast(payload.detail || '更新状态失败', 'danger');
         return;
     }
-    showResult('userActionResult', true, '状态已更新');
+    showToast('状态已更新', 'success');
     setTimeout(() => location.reload(), 400);
 }
 
 async function resetPassword(userId, username) {
     const pwd = prompt(`为用户 ${username} 设置新密码（至少 6 位）`);
-    if (!pwd) {
-        return;
-    }
+    if (!pwd) return;
+    if (pwd.length < 6) { showToast('密码至少 6 位', 'danger'); return; }
     const fd = new FormData();
     fd.append('password', pwd);
     fd.append('must_change_password', 'true');
     const resp = await fetch(`/api/users/${userId}/password`, {method: 'POST', body: fd});
     const payload = await resp.json();
     if (!resp.ok || !payload.ok) {
-        showResult('userActionResult', false, payload.detail || '重置密码失败');
+        showToast(payload.detail || '重置密码失败', 'danger');
         return;
     }
-    showResult('userActionResult', true, `已重置 ${username} 密码`);
+    showToast(`已重置 ${username} 密码`, 'success');
+}
+
+function prepareEdit(id, username, role, fullName, email) {
+    document.getElementById('editUserId').value = id;
+    document.getElementById('editUsername').value = username;
+    document.getElementById('editRole').value = role;
+    document.getElementById('editFullName').value = fullName;
+    document.getElementById('editEmail').value = email;
+}
+
+async function saveEdit() {
+    const id = document.getElementById('editUserId').value;
+    const fd = new FormData();
+    fd.append('username', document.getElementById('editUsername').value);
+    fd.append('role', document.getElementById('editRole').value);
+    fd.append('full_name', document.getElementById('editFullName').value);
+    fd.append('email', document.getElementById('editEmail').value);
+    const resp = await fetch(`/api/users/${id}/update`, {method: 'POST', body: fd});
+    const payload = await resp.json();
+    if (!resp.ok || !payload.ok) {
+        showToast(payload.detail || '更新失败', 'danger');
+        return;
+    }
+    bootstrap.Modal.getInstance(document.getElementById('editModal')).hide();
+    showToast('用户信息已更新', 'success');
+    setTimeout(() => location.reload(), 400);
+}
+
+async function deleteUser(id, username) {
+    if (!confirm(`确定要删除用户 "${username}"？此操作不可恢复！`)) return;
+    const resp = await fetch(`/api/users/${id}/delete`, {method: 'POST'});
+    const payload = await resp.json();
+    if (!resp.ok || !payload.ok) {
+        showToast(payload.detail || '删除失败', 'danger');
+        return;
+    }
+    showToast(`用户 ${username} 已删除`, 'success');
+    setTimeout(() => location.reload(), 400);
 }
 </script>
 {% endblock %}
