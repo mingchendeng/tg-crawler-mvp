@@ -71,6 +71,26 @@
         .form-control-sm, .form-select-sm { font-size: .82rem; }
         .modal-header { border-bottom: 1px solid #eee; }
         .modal-footer { border-top: 1px solid #eee; }
+
+        /* Media preview modal */
+        #mediaModal .modal-content { background:#000; border:0; border-radius:0; }
+        #mediaModal .btn-close { filter:invert(1); opacity:.7; }
+        #mediaModal .btn-close:hover { opacity:1; }
+        .media-play-overlay {
+            position: absolute; inset: 0;
+            display: flex; align-items: center; justify-content: center;
+            background: rgba(0,0,0,0.15);
+            cursor: pointer; border-radius: 8px;
+        }
+        .media-play-overlay::after {
+            content: '▶';
+            font-size: 3rem; color: #fff;
+            text-shadow: 0 2px 8px rgba(0,0,0,0.5);
+            opacity: .85;
+            line-height: 1;
+        }
+        .media-play-overlay:hover::after { opacity: 1; }
+
         @media (max-width: 768px) {
             .sidebar { width: 56px; }
             .sidebar .brand span, .sidebar .nav-item span, .sidebar .user-info { display: none; }
@@ -130,10 +150,29 @@
         </div>
     </div>
 </nav>
-{% endif %}
-
 <div class="main-content">
+{% else %}
+<div class="main-content" style="margin-left:0;display:flex;align-items:center;justify-content:center;min-height:100vh;">
+{% endif %}
     {% block content %}{% endblock %}
+</div>
+
+<!-- Media Preview Modal -->
+<div class="modal fade" id="mediaModal" tabindex="-1" data-bs-keyboard="false">
+  <div class="modal-dialog modal-fullscreen modal-dialog-centered">
+    <div class="modal-content bg-black">
+      <button type="button" class="btn-close btn-close-white position-absolute top-0 end-0 m-3" data-bs-dismiss="modal" style="z-index:10;opacity:.8"></button>
+      <button id="modalPrevBtn" class="btn btn-dark bg-dark bg-opacity-50 border-0 position-absolute top-50 start-0 ms-2 translate-middle-y" onclick="prevMedia()" style="z-index:10;font-size:2rem;line-height:1;display:none">‹</button>
+      <button id="modalNextBtn" class="btn btn-dark bg-dark bg-opacity-50 border-0 position-absolute top-50 end-0 me-2 translate-middle-y" onclick="nextMedia()" style="z-index:10;font-size:2rem;line-height:1;display:none">›</button>
+      <div class="modal-body d-flex align-items-center justify-content-center p-0">
+        <video id="modalVideo" controls style="max-width:100%;max-height:90vh;display:none;"></video>
+        <img id="modalImage" style="max-width:100%;max-height:90vh;display:none;">
+      </div>
+      <div class="position-absolute bottom-0 w-100 text-white text-center pb-3" style="background:linear-gradient(transparent,rgba(0,0,0,.7));z-index:10;">
+        <span id="modalMediaInfo" class="small"></span>
+      </div>
+    </div>
+  </div>
 </div>
 
 <script src="/static/bootstrap.bundle.min.js"></script>
@@ -156,6 +195,60 @@ function hideLoading(btn, text) {
     if (!btn) return;
     btn.disabled = false; btn.innerHTML = text || btn.dataset.origText || '确定';
 }
+
+/* Media preview modal */
+let _mediaItems = [];
+let _mediaIndex = 0;
+let _mediaModalInstance = null;
+
+function openMediaPreview(items, index) {
+    _mediaItems = items;
+    _mediaIndex = index;
+    _mediaModalInstance = new bootstrap.Modal(document.getElementById('mediaModal'));
+    _mediaModalInstance.show();
+    renderMedia();
+    document.getElementById('mediaModal').addEventListener('hidden.bs.modal', function _cleanup() {
+        stopMedia();
+        this.removeEventListener('hidden.bs.modal', _cleanup);
+    });
+}
+
+function renderMedia() {
+    const item = _mediaItems[_mediaIndex];
+    if (!item) return;
+    const video = document.getElementById('modalVideo');
+    const img = document.getElementById('modalImage');
+    video.style.display = 'none'; video.pause(); video.src = '';
+    img.style.display = 'none'; img.src = '';
+
+    if (item.media_type === 'video') {
+        video.src = item.s3_url;
+        video.style.display = 'block';
+        video.play().catch(function() {});
+    } else {
+        img.src = item.thumb_url || item.s3_url;
+        img.style.display = 'block';
+    }
+
+    document.getElementById('modalPrevBtn').style.display = _mediaIndex > 0 ? '' : 'none';
+    document.getElementById('modalNextBtn').style.display = _mediaIndex < _mediaItems.length - 1 ? '' : 'none';
+    var info = (_mediaIndex + 1) + '/' + _mediaItems.length + ' \u00b7 ' + item.media_type;
+    if (item.file_size) info += ' \u00b7 ' + (item.file_size / 1048576).toFixed(1) + 'MB';
+    if (item.width) info += ' \u00b7 ' + item.width + '\u00d7' + item.height;
+    document.getElementById('modalMediaInfo').textContent = info;
+}
+
+function prevMedia() { if (_mediaIndex > 0) { _mediaIndex--; renderMedia(); } }
+function nextMedia() { if (_mediaIndex < _mediaItems.length - 1) { _mediaIndex++; renderMedia(); } }
+function stopMedia() { const v = document.getElementById('modalVideo'); v.pause(); v.src = ''; }
+
+document.addEventListener('keydown', function(e) {
+    var modal = document.getElementById('mediaModal');
+    if (!modal.classList.contains('show')) return;
+    if (e.key === 'ArrowLeft') { prevMedia(); e.preventDefault(); }
+    else if (e.key === 'ArrowRight') { nextMedia(); e.preventDefault(); }
+    else if (e.key === 'Escape') { if (_mediaModalInstance) _mediaModalInstance.hide(); }
+});
 </script>
 {% block extra_js %}{% endblock %}
 </body>

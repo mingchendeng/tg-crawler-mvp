@@ -2501,6 +2501,22 @@ async def update_profile(
     return {'ok': True}
 
 
+@app.get('/api/messages/{msg_id}/media')
+async def api_message_media(msg_id: int, request: Request, db=Depends(get_db)):
+    user = get_current_user(request, db)
+    rows = db_execute(
+        db,
+        """
+        SELECT id, media_type, s3_url, thumb_url, file_size, width, height, mime_type
+        FROM media_files
+        WHERE message_id = %s
+        ORDER BY id
+        """,
+        (msg_id,),
+    ).fetchall()
+    return {'ok': True, 'media': [dict(r) for r in rows]}
+
+
 # ==================== Auth ====================
 
 

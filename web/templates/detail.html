@@ -84,24 +84,23 @@
                 <div class="row g-3">
                     {% for m in media %}
                     <div class="col-6 col-md-4">
-                        <div class="position-relative">
+                        <div class="position-relative" style="cursor:pointer" onclick='openMediaPreview({{ media | tojson }}, {{ loop.index0 }})'>
                             {% if m.media_type == 'video' %}
-                            <video src="{{ m.s3_url }}" class="media-thumb" controls preload="metadata"></video>
+                            <video src="{{ m.s3_url }}" class="media-thumb" preload="metadata" muted playsinline></video>
+                            <div class="media-play-overlay"></div>
                             {% elif m.media_type == 'audio' %}
-                            <audio src="{{ m.s3_url }}" controls style="width:100%"></audio>
-                            <div class="mt-2 small"><a href="{{ m.s3_url }}" target="_blank">打开音频文件</a></div>
+                            <audio src="{{ m.s3_url }}" controls style="width:100%" onclick="event.stopPropagation()"></audio>
+                            <div class="mt-2 small"><a href="{{ m.s3_url }}" target="_blank" onclick="event.stopPropagation()">打开音频文件</a></div>
                             {% elif m.media_type == 'document' %}
-                            <div class="border rounded p-3 bg-light small">
+                            <div class="border rounded p-3 bg-light small" style="height:200px;">
                                 <div class="mb-2">文档文件</div>
-                                <a href="{{ m.s3_url }}" target="_blank">打开文件</a>
+                                <a href="{{ m.s3_url }}" target="_blank" onclick="event.stopPropagation()">打开文件</a>
                             </div>
                             {% else %}
-                            <a href="{{ m.s3_url }}" target="_blank">
-                                <img src="{{ m.thumb_url or m.s3_url }}" class="media-thumb" loading="lazy">
-                            </a>
+                            <img src="{{ m.thumb_url or m.s3_url }}" class="media-thumb" loading="lazy">
                             {% endif %}
                             {% if m.ocr_text %}
-                            <span class="position-absolute top-0 end-0 badge bg-dark m-2" title="OCR">OCR</span>
+                            <span class="position-absolute top-0 end-0 badge bg-dark m-2" title="OCR" onclick="event.stopPropagation()">OCR</span>
                             {% endif %}
                         </div>
                         <div class="d-flex justify-content-between align-items-center mt-1">

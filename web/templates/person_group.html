@@ -30,20 +30,23 @@
         <div class="row g-3">
             {% for m in media_rows %}
             <div class="col-6 col-md-3 col-xl-2">
-                {% if m.media_type == 'video' %}
-                <video src="{{ m.s3_url }}" controls preload="metadata" style="width:100%;height:140px;object-fit:cover;border-radius:8px"></video>
-                {% elif m.media_type == 'audio' %}
-                <audio src="{{ m.s3_url }}" controls style="width:100%"></audio>
-                {% elif m.media_type == 'document' %}
-                <div class="border rounded p-2 bg-light small" style="height:140px;">
-                    <div class="mb-2">文档</div>
-                    <a href="{{ m.s3_url }}" target="_blank">打开文件</a>
+                <div style="cursor:pointer" onclick="previewMessageMedia({{ m.message_id }})">
+                    {% if m.media_type == 'video' %}
+                    <div class="position-relative">
+                        <video src="{{ m.s3_url }}" preload="metadata" muted playsinline style="width:100%;height:140px;object-fit:cover;border-radius:8px"></video>
+                        <div class="media-play-overlay" style="border-radius:8px"></div>
+                    </div>
+                    {% elif m.media_type == 'audio' %}
+                    <audio src="{{ m.s3_url }}" controls style="width:100%" onclick="event.stopPropagation()"></audio>
+                    {% elif m.media_type == 'document' %}
+                    <div class="border rounded p-2 bg-light small" style="height:140px;">
+                        <div class="mb-2">文档</div>
+                        <a href="{{ m.s3_url }}" target="_blank" onclick="event.stopPropagation()">打开文件</a>
+                    </div>
+                    {% else %}
+                    <img src="{{ m.thumb_url or m.s3_url }}" style="width:100%;height:140px;object-fit:cover;border-radius:8px;cursor:pointer" loading="lazy">
+                    {% endif %}
                 </div>
-                {% else %}
-                <a href="{{ m.s3_url }}" target="_blank">
-                    <img src="{{ m.thumb_url or m.s3_url }}" style="width:100%;height:140px;object-fit:cover;border-radius:8px" loading="lazy">
-                </a>
-                {% endif %}
                 <div class="small text-muted mt-1">msg {{ m.telegram_message_id or '-' }} | {{ m.media_type }}</div>
             </div>
             {% endfor %}

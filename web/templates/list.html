@@ -237,7 +237,7 @@
                                     {{ "%.0f%%"|format(conf*100) }}
                                 </span>
                             </td>
-                            <td>{% if row.media_count > 0 %}<span class="badge bg-info">{{ row.media_count }}</span>{% else %}-{% endif %}</td>
+                            <td>{% if row.media_count > 0 %}<span class="badge bg-info" style="cursor:pointer" onclick="previewMessageMedia({{ row.id }})">{{ row.media_count }}</span>{% else %}-{% endif %}</td>
                             <td>
                                 <span class="badge bg-{{ 'secondary' if row.review_status=='pending' else ('success' if row.review_status=='approved' else ('danger' if row.review_status=='rejected' else 'warning')) }}">
                                     {{ row.review_status }}
@@ -345,6 +345,21 @@ async function quickStartPipeline(btn) {
     const actions = (payload.actions || []).join(', ');
     showToast(`启动完成：${actions}`, 'success');
     setTimeout(() => location.reload(), 700);
+}
+
+// Preview media from list page (lazy load via API)
+async function previewMessageMedia(msgId) {
+    try {
+        const resp = await fetch('/api/messages/' + msgId + '/media');
+        const data = await resp.json();
+        if (data.ok && data.media.length > 0) {
+            openMediaPreview(data.media, 0);
+        } else {
+            showToast('没有媒体文件', 'warning');
+        }
+    } catch (e) {
+        showToast('加载媒体失败: ' + e.message, 'danger');
+    }
 }
 
 // Dynamic pipeline status refresh every 15s
