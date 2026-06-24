@@ -1,0 +1,51 @@
+name: Deploy to EC2
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Deploy to EC2 via rsync
+        uses: burnett01/rsync-deployments@7.0.1
+        with:
+          switches: -avz --delete --exclude='.venv' --exclude='venv' --exclude='.git' --exclude='__pycache__' --exclude='*.pyc' --exclude='.env*'
+          path: .
+          remote_path: /opt/tg-crawler
+          remote_host: ${{ secrets.EC2_HOST }}
+          remote_user: ${{ secrets.EC2_USER }}
+          remote_key: ${{ secrets.EC2_SSH_KEY }}
+
+      - name: Verify deploy script exists & is executable
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USER }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          script: |
+            set -euxo pipefail
+            if [ ! -f /opt/tg-crawler/deploy.sh ]; then
+              echo "deploy_missing"
+              ls -la /opt/tg-crawler || true
+              exit 1
+            fi
+            if [ ! -x /opt/tg-crawler/deploy.sh ]; then
+              echo "deploy_not_executable - attempting to chmod +x"
+              sudo chmod +x /opt/tg-crawler/deploy.sh || true
+            fi
+            echo "deploy_present"
+
+      - name: Run deploy script
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USER }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          script: |
+            set -xuo pipefail
+            bash -x /opt/tg-crawler/deploy.sh
