@@ -86,8 +86,19 @@ ENVEOF
             echo "---END-OF-REMOTE-LOG---"
         env: {}
 
-      - name: Save remote deploy log into workspace (requires runner-side upload)
+      - name: Write SSH key for runner
         run: |
-          # The SSH step above printed the remote log into the job's stdout. We capture it via step output isn't trivial here; as a fallback, attempt to download via scp
-          echo "No-op: logs are printed in previous SSH step. If you want artifact upload, enable scp of /opt/tg-crawler/deploy_logs/ to the runner via runner's ssh agent or use rsync from the runner."
-      # Note: actions/upload-artifact cannot access files on the remote host directly. To upload remote files, either scp them to $GITHUB_WORKSPACE or use a custom action that streams them.
+          mkdir -p ~/.ssh
+          echo "${{ secrets.EC2_SSH_KEY }}" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+
+      - name: Fetch remote deploy_logs via scp
+        run: |
+          mkdir -p deploy_logs
+          scp -o StrictHostKeyChecking=no -i ~/.ssh/id_rsa -r ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }}:/opt/tg-crawler/deploy_logs ./ || true
+
+      - name: Upload deploy logs as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: deploy-logs
+          path: deploy_logs/
