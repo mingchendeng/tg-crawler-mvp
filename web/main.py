@@ -20,6 +20,7 @@ from urllib.parse import urlencode
 from io import BytesIO
 from base64 import b64encode
 
+import psutil
 import qrcode
 from telethon import TelegramClient
 from telethon import errors as tg_errors
@@ -974,6 +975,17 @@ async def ops_page(request: Request, db=Depends(get_db)):
     )
 
 
+@app.get('/monitor', response_class=HTMLResponse)
+async def monitor_page(request: Request, db=Depends(get_db)):
+    user = get_current_user(request, db)
+    _require_admin_user(user)
+    return templates.TemplateResponse(
+        request=request,
+        name='monitor.html',
+        context={'user': user},
+    )
+
+
 @app.get('/users', response_class=HTMLResponse)
 async def users_page(request: Request, db=Depends(get_db)):
     user = get_current_user(request, db)
@@ -1094,6 +1106,7 @@ async def persons_page(
     code_norm_expr = "LOWER(REGEXP_REPLACE(COALESCE(p.internal_code, ''), '[^a-zA-Z0-9]+', '', 'g'))"
     person_key_expr = (
         f"CASE "
+        f"WHEN p.person_id IS NOT NULL THEN 'person:' || p.person_id::text "
         f"WHEN {code_norm_expr} <> '' THEN 'code:' || {code_norm_expr} "
         f"WHEN m.media_group_id IS NOT NULL THEN 'album:' || m.channel_id::text || ':' || m.media_group_id::text "
         f"ELSE 'msg:' || m.id::text END"
@@ -1185,7 +1198,7 @@ async def persons_page(
                 COALESCE(mc.media_count, 0) AS media_count,
                 mp.preview_url,
                 mp.media_type AS preview_media_type,
-                mp.s3_url AS preview_s3_url,
+                mp.preview_s3_url,
                 {person_key_expr} AS person_key
             FROM profiles p
             LEFT JOIN messages m ON m.id = p.message_id
@@ -1198,8 +1211,8 @@ async def persons_page(
             LEFT JOIN LATERAL (
                 SELECT
                     mf.media_type,
-                    COALESCE(mf.thumb_url, mf.s3_url) AS preview_url,
-                    mf.s3_url
+                    COALESCE(mf.local_thumb_url, mf.thumb_url, mf.local_s3_url, mf.s3_url) AS preview_url,
+                    COALESCE(mf.local_s3_url, mf.s3_url) AS preview_s3_url
                 FROM media_files mf
                 WHERE mf.message_id = m.id
                 ORDER BY
@@ -1272,7 +1285,15 @@ async def person_group_page(
 
     code_norm_expr = "LOWER(REGEXP_REPLACE(COALESCE(p.internal_code, ''), '[^a-zA-Z0-9]+', '', 'g'))"
     params: Dict[str, Any] = {}
-    if person_key.startswith('code:'):
+    if person_key.startswith('person:'):
+        person_id = _parse_int(person_key[7:])
+        if not person_id:
+            raise HTTPException(400, '无效人物分组 key')
+        where_clause = 'p.person_id = %(person_id)s'
+        params['person_id'] = person_id
+        pn = db_execute(db, "SELECT id, display_nickname, normalized_code FROM persons WHERE id = %s", (person_id,)).fetchone()
+        group_label = pn['display_nickname'] or pn['normalized_code'] or f'Person {person_id}' if pn else f'Person {person_id}'
+    elif person_key.startswith('code:'):
         code_norm = _normalize_code_key(person_key[5:])
         if not code_norm:
             raise HTTPException(400, '无效人物分组 key')
@@ -1355,7 +1376,15 @@ async def person_group_page(
             db,
             """
             SELECT
-                mf.*,
+                mf.id, mf.message_id, mf.owner_user_id,
+                mf.telegram_file_id, mf.file_unique_id, mf.media_type,
+                mf.mime_type, mf.file_size, mf.width, mf.height,
+                mf.s3_bucket, mf.s3_key,
+                COALESCE(mf.local_s3_url, mf.s3_url) AS s3_url,
+                COALESCE(mf.local_thumb_url, mf.thumb_url) AS thumb_url,
+                mf.thumb_key, mf.local_s3_url, mf.local_thumb_url,
+                mf.local_path, mf.ocr_text, mf.is_nsfw,
+                mf.face_detected, mf.processing_status, mf.created_at,
                 m.telegram_message_id,
                 m.telegram_date
             FROM media_files mf
@@ -1372,6 +1401,7 @@ async def person_group_page(
         name='person_group.html',
         context={
             'user': user,
+            'is_admin': is_admin(user),
             'person_key': person_key,
             'group_label': group_label,
             'summary': summary,
@@ -1559,6 +1589,87 @@ async def api_system_status(request: Request, db=Depends(get_db)):
     user = get_current_user(request, db)
     _require_admin_user(user)
     return {'ok': True, 'status': _collect_runtime_status(db)}
+
+
+@app.get('/api/system/resources')
+async def api_system_resources(request: Request, db=Depends(get_db)):
+    user = get_current_user(request, db)
+    _require_admin_user(user)
+    try:
+        cpu_percent = psutil.cpu_percent(interval=0.5)
+        cpu_load = psutil.getloadavg()
+        mem = psutil.virtual_memory()
+        disks = []
+        for p in psutil.disk_partitions():
+            try:
+                du = psutil.disk_usage(p.mountpoint)
+                disks.append({
+                    'mount': p.mountpoint, 'fstype': p.fstype,
+                    'total': du.total, 'used': du.used, 'free': du.free,
+                    'percent': du.percent,
+                })
+            except PermissionError:
+                pass
+        net = psutil.net_io_counters()
+        boot = psutil.boot_time()
+        uptime = int(time.time() - boot)
+
+        io_counters = []
+        for dev, io in psutil.disk_io_counters(perdisk=True).items():
+            io_counters.append({
+                'device': dev,
+                'read_bytes': io.read_bytes,
+                'write_bytes': io.write_bytes,
+                'read_count': io.read_count,
+                'write_count': io.write_count,
+            })
+
+        processes = []
+        for proc in sorted(psutil.process_iter(['pid', 'name', 'username', 'cpu_percent', 'memory_percent', 'memory_info', 'cmdline']), key=lambda p: p.info['cpu_percent'] or 0, reverse=True)[:10]:
+            try:
+                cmd = ' '.join(proc.info['cmdline'] or ['']) if proc.info['cmdline'] else proc.info['name'] or ''
+                processes.append({
+                    'pid': proc.info['pid'],
+                    'user': proc.info['username'] or '-',
+                    'cpu_percent': proc.info['cpu_percent'] or 0,
+                    'memory_percent': round(proc.info['memory_percent'] or 0, 1),
+                    'rss': (proc.info['memory_info'] or psutil.pages()).rss if hasattr(proc.info['memory_info'] or psutil.pages(), 'rss') else 0,
+                    'cmdline': cmd[:120],
+                })
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                pass
+
+        return {
+            'ok': True,
+            'resources': {
+                'cpu': {
+                    'percent': cpu_percent,
+                    'load_1': round(cpu_load[0], 2),
+                    'load_5': round(cpu_load[1], 2),
+                    'load_15': round(cpu_load[2], 2),
+                },
+                'memory': {
+                    'total': mem.total,
+                    'available': mem.available,
+                    'used': mem.used,
+                    'percent': mem.percent,
+                },
+                'disks': disks,
+                'network': {
+                    'rx': net.bytes_recv,
+                    'tx': net.bytes_sent,
+                },
+                'system': {
+                    'uptime': uptime,
+                    'processes': len(psutil.pids()),
+                    'hostname': socket.gethostname(),
+                },
+                'io': io_counters,
+                'processes': processes,
+            },
+        }
+    except Exception as e:
+        return {'ok': False, 'error': str(e)}
 
 
 def _tail_log(service: str, lines: int = 100) -> List[str]:
@@ -2486,6 +2597,42 @@ async def update_profile(
     }
 
     _upsert_profile(db, msg_id, payload)
+    msg_row = db_execute(db, 'SELECT channel_id FROM messages WHERE id = %s', (msg_id,)).fetchone()
+    if msg_row:
+        extracted = {
+            'nickname': payload.get('display_nickname'),
+            'code': payload.get('internal_code'),
+            'province': payload.get('province'),
+            'city': payload.get('city'),
+            'age': payload.get('age'),
+            'height': payload.get('height'),
+            'weight': payload.get('weight'),
+            'cup': payload.get('cup_size'),
+            'occupation': payload.get('occupation'),
+            'intro_fee': payload.get('introduction_fee'),
+            'monthly_allowance': payload.get('monthly_allowance'),
+        }
+        pn = db_execute(db, 'SELECT id FROM profiles WHERE message_id = %s ORDER BY id LIMIT 1', (msg_id,)).fetchone()
+        if pn:
+            code = _normalize_code(payload.get('internal_code'))
+            if code:
+                cur = db.cursor()
+                cur.execute(
+                    "SELECT id FROM persons WHERE channel_id = %s AND normalized_code = %s",
+                    (msg_row['channel_id'], code),
+                )
+                person_row = cur.fetchone()
+                if person_row:
+                    person_id = person_row[0]
+                else:
+                    cur.execute(
+                        """INSERT INTO persons (channel_id, normalized_code, display_nickname)
+                           VALUES (%s, %s, %s) RETURNING id""",
+                        (msg_row['channel_id'], code, payload.get('display_nickname')),
+                    )
+                    person_id = cur.fetchone()[0]
+                cur.execute("UPDATE profiles SET person_id = %s WHERE id = %s", (person_id, pn['id']))
+                db.commit()
     db_execute(
         db,
         'INSERT INTO audit_logs (message_id, reviewer_id, action, old_values, new_values) VALUES (%s, %s, %s, %s, %s)',
@@ -2507,7 +2654,10 @@ async def api_message_media(msg_id: int, request: Request, db=Depends(get_db)):
     rows = db_execute(
         db,
         """
-        SELECT id, media_type, s3_url, thumb_url, file_size, width, height, mime_type
+        SELECT id, media_type,
+               COALESCE(local_s3_url, s3_url) AS s3_url,
+               COALESCE(local_thumb_url, thumb_url) AS thumb_url,
+               file_size, width, height, mime_type
         FROM media_files
         WHERE message_id = %s
         ORDER BY id
@@ -2515,6 +2665,169 @@ async def api_message_media(msg_id: int, request: Request, db=Depends(get_db)):
         (msg_id,),
     ).fetchall()
     return {'ok': True, 'media': [dict(r) for r in rows]}
+
+
+# ==================== Persons ====================
+
+
+@app.post('/api/persons/merge')
+async def merge_persons(
+    request: Request,
+    source_person_id: int = Form(...),
+    target_person_id: int = Form(...),
+    db=Depends(get_db),
+):
+    user = get_current_user(request, db)
+    if not is_admin(user):
+        raise HTTPException(403, '仅管理员可合并人物')
+
+    if source_person_id == target_person_id:
+        return {'ok': False, 'error': '不能合并到自身'}
+
+    cur = db.cursor()
+    cur.execute("SELECT id FROM persons WHERE id = %s", (source_person_id,))
+    if not cur.fetchone():
+        return {'ok': False, 'error': '源人物不存在'}
+    cur.execute("SELECT id FROM persons WHERE id = %s", (target_person_id,))
+    if not cur.fetchone():
+        return {'ok': False, 'error': '目标人物不存在'}
+
+    cur.execute(
+        "UPDATE profiles SET person_id = %s WHERE person_id = %s",
+        (target_person_id, source_person_id),
+    )
+    moved = cur.rowcount
+
+    cur.execute(
+        """UPDATE persons SET
+           profile_count = profile_count + (SELECT profile_count FROM persons WHERE id = %s),
+           last_seen_at = NOW()
+           WHERE id = %s""",
+        (source_person_id, target_person_id),
+    )
+    cur.execute("DELETE FROM persons WHERE id = %s", (source_person_id,))
+    db.commit()
+    return {'ok': True, 'moved_profiles': moved, 'target_person_id': target_person_id}
+
+
+@app.post('/api/persons/backfill')
+async def backfill_persons_api(request: Request, db=Depends(get_db)):
+    user = get_current_user(request, db)
+    if not is_admin(user):
+        raise HTTPException(403, '仅管理员可操作')
+    cur = db.cursor()
+    cur.execute("""
+        SELECT p.id AS profile_id, p.internal_code, p.message_id,
+               p.display_nickname, p.province, p.city, p.age, p.height, p.weight,
+               p.cup_size, p.occupation, p.introduction_fee, p.monthly_allowance,
+               p.tags, p.contact_info::text,
+               m.channel_id
+        FROM profiles p
+        LEFT JOIN messages m ON m.id = p.message_id
+        WHERE p.person_id IS NULL AND m.channel_id IS NOT NULL
+        LIMIT 1000
+    """)
+    rows = cur.fetchall()
+    if not rows:
+        db.commit()
+        return {'ok': True, 'backfilled': 0}
+
+    count = 0
+    for r in rows:
+        profile_id, internal_code = r[0], r[1]
+        channel_id = r[15]
+        nickname = r[3] or ''
+        contact_info_text = r[14]
+        contacts = None
+        if contact_info_text:
+            try:
+                ci = json.loads(contact_info_text)
+                contacts = ci.get('contacts')
+            except (json.JSONDecodeError, TypeError):
+                pass
+
+        normalized_code = None
+        if internal_code:
+            norm = re.sub(r'[`\s]+', '', str(internal_code).strip())
+            norm = re.sub(r'[^A-Za-z0-9_-]', '', norm)
+            if norm:
+                normalized_code = norm
+
+        if normalized_code:
+            cur.execute(
+                "SELECT id FROM persons WHERE channel_id = %s AND normalized_code = %s",
+                (channel_id, normalized_code),
+            )
+            person_row = cur.fetchone()
+            if person_row:
+                person_id = person_row[0]
+                cur.execute(
+                    "UPDATE persons SET profile_count = profile_count + 1, last_seen_at = NOW() WHERE id = %s",
+                    (person_id,),
+                )
+            else:
+                cur.execute(
+                    """INSERT INTO persons (channel_id, normalized_code, display_nickname,
+                       province, city, age, height, weight, cup_size, occupation,
+                       introduction_fee, monthly_allowance)
+                       VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                       RETURNING id""",
+                    (channel_id, normalized_code, r[3], r[4], r[5], r[6], r[7], r[8],
+                     r[9], r[10], r[11], r[12]),
+                )
+                person_id = cur.fetchone()[0]
+        else:
+            cur.execute(
+                "INSERT INTO persons (channel_id, display_nickname) VALUES (%s, %s) RETURNING id",
+                (channel_id, nickname),
+            )
+            person_id = cur.fetchone()[0]
+
+        cur.execute("UPDATE profiles SET person_id = %s WHERE id = %s", (person_id, profile_id))
+        count += 1
+
+    db.commit()
+    return {'ok': True, 'backfilled': count}
+
+
+# ==================== Media ====================
+
+
+@app.post('/api/media/backfill-local')
+async def backfill_local_minio(request: Request, db=Depends(get_db)):
+    user = get_current_user(request, db)
+    _require_admin_user(user)
+
+    from crawler.uploader import S3Uploader
+    uploader = S3Uploader()
+    if not uploader.local_client:
+        raise HTTPException(400, '本地 MinIO 未配置（S3_LOCAL_ENDPOINT 为空）')
+
+    cur = db.cursor()
+    cur.execute(
+        """SELECT id, s3_key, thumb_key
+           FROM media_files
+           WHERE local_s3_url IS NULL
+             AND s3_key IS NOT NULL
+           LIMIT 500"""
+    )
+    rows = cur.fetchall()
+    if not rows:
+        db.commit()
+        return {'ok': True, 'backfilled': 0, 'total': 0}
+
+    count = 0
+    for r in rows:
+        local_s3_url, local_thumb_url = uploader.retry_local_mirror(r['s3_key'], r['thumb_key'])
+        if local_s3_url:
+            cur.execute(
+                "UPDATE media_files SET local_s3_url = %s, local_thumb_url = %s WHERE id = %s",
+                (local_s3_url, local_thumb_url, r['id']),
+            )
+            count += 1
+
+    db.commit()
+    return {'ok': True, 'backfilled': count, 'total': len(rows)}
 
 
 # ==================== Auth ====================
@@ -2643,6 +2956,40 @@ def _ensure_identity_schema(conn):
         )
         """
     )
+
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS persons (
+            id BIGSERIAL PRIMARY KEY,
+            owner_user_id BIGINT,
+            channel_id BIGINT REFERENCES channels(id) ON DELETE CASCADE,
+            normalized_code VARCHAR(50),
+            display_nickname VARCHAR(255),
+            province VARCHAR(100),
+            city VARCHAR(100),
+            age INTEGER,
+            height INTEGER,
+            weight INTEGER,
+            cup_size VARCHAR(20),
+            occupation VARCHAR(100),
+            introduction_fee DECIMAL(12,2),
+            monthly_allowance DECIMAL(12,2),
+            tags TEXT[],
+            contact_info JSONB,
+            profile_count INTEGER DEFAULT 1,
+            first_seen_at TIMESTAMPTZ DEFAULT NOW(),
+            last_seen_at TIMESTAMPTZ DEFAULT NOW(),
+            created_at TIMESTAMPTZ DEFAULT NOW()
+        )
+        """
+    )
+    cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_persons_channel_code ON persons(channel_id, normalized_code) WHERE normalized_code IS NOT NULL")
+    cur.execute("ALTER TABLE profiles ADD COLUMN IF NOT EXISTS person_id BIGINT REFERENCES persons(id) ON DELETE SET NULL")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_profiles_person ON profiles(person_id)")
+
+    cur.execute("ALTER TABLE media_files ADD COLUMN IF NOT EXISTS local_s3_url TEXT")
+    cur.execute("ALTER TABLE media_files ADD COLUMN IF NOT EXISTS local_thumb_url TEXT")
+
     conn.commit()
     cur.close()
 
@@ -2707,5 +3054,83 @@ async def init_admin():
     row = cur.fetchone()
     if row:
         _backfill_owner_scope(conn, int(row[0]))
+    _backfill_persons(conn)
     cur.close()
     conn.close()
+
+
+def _backfill_persons(conn):
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT p.id AS profile_id, p.internal_code, p.message_id,
+               p.display_nickname, p.province, p.city, p.age, p.height, p.weight,
+               p.cup_size, p.occupation, p.introduction_fee, p.monthly_allowance,
+               p.tags, p.contact_info::text,
+               m.channel_id
+        FROM profiles p
+        LEFT JOIN messages m ON m.id = p.message_id
+        WHERE p.person_id IS NULL AND m.channel_id IS NOT NULL
+        LIMIT 1000
+    """)
+    rows = cur.fetchall()
+    if not rows:
+        cur.close()
+        return
+
+    count = 0
+    for r in rows:
+        profile_id, internal_code = r[0], r[1]
+        channel_id = r[15]
+        nickname = r[3] or ''
+        contact_info_text = r[14]
+        contacts = None
+        if contact_info_text:
+            try:
+                ci = json.loads(contact_info_text)
+                contacts = ci.get('contacts')
+            except (json.JSONDecodeError, TypeError):
+                pass
+
+        normalized_code = None
+        if internal_code:
+            norm = re.sub(r'[`\s]+', '', str(internal_code).strip())
+            norm = re.sub(r'[^A-Za-z0-9_-]', '', norm)
+            if norm:
+                normalized_code = norm
+
+        if normalized_code:
+            cur.execute(
+                "SELECT id FROM persons WHERE channel_id = %s AND normalized_code = %s",
+                (channel_id, normalized_code),
+            )
+            person_row = cur.fetchone()
+            if person_row:
+                person_id = person_row[0]
+                cur.execute(
+                    "UPDATE persons SET profile_count = profile_count + 1, last_seen_at = NOW() WHERE id = %s",
+                    (person_id,),
+                )
+            else:
+                cur.execute(
+                    """INSERT INTO persons (channel_id, normalized_code, display_nickname,
+                       province, city, age, height, weight, cup_size, occupation,
+                       introduction_fee, monthly_allowance)
+                       VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                       RETURNING id""",
+                    (channel_id, normalized_code, r[3], r[4], r[5], r[6], r[7], r[8],
+                     r[9], r[10], r[11], r[12]),
+                )
+                person_id = cur.fetchone()[0]
+        else:
+            cur.execute(
+                "INSERT INTO persons (channel_id, display_nickname) VALUES (%s, %s) RETURNING id",
+                (channel_id, nickname),
+            )
+            person_id = cur.fetchone()[0]
+
+        cur.execute("UPDATE profiles SET person_id = %s WHERE id = %s", (person_id, profile_id))
+        count += 1
+
+    conn.commit()
+    print(f"Backfilled {count} profiles into persons table")
+    cur.close()

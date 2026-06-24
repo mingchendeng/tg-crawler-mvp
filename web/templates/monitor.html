@@ -1,0 +1,254 @@
+{% extends "base.html" %}
+{% block title %}系统监控{% endblock %}
+{% block content %}
+<div class="container-fluid py-3">
+    <h5 class="mb-3"><i class="bi bi-activity"></i> 系统资源监控</h5>
+
+    <div class="row g-3" id="monitor-cards">
+        <div class="col-md-3">
+            <div class="card h-100">
+                <div class="card-body">
+                    <h6 class="card-title"><i class="bi bi-cpu"></i> CPU</h6>
+                    <div class="d-flex justify-content-between mb-1">
+                        <span class="small text-muted">使用率</span>
+                        <span class="small fw-bold" id="cpu-percent">--</span>
+                    </div>
+                    <div class="progress mb-2" style="height:8px;">
+                        <div id="cpu-bar" class="progress-bar" role="progressbar" style="width:0%"></div>
+                    </div>
+                    <div class="small text-muted d-flex justify-content-between">
+                        <span>负载 (1/5/15): <span id="cpu-load">--</span></span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="col-md-3">
+            <div class="card h-100">
+                <div class="card-body">
+                    <h6 class="card-title"><i class="bi bi-memory"></i> 内存</h6>
+                    <div class="d-flex justify-content-between mb-1">
+                        <span class="small text-muted">已用</span>
+                        <span class="small fw-bold" id="mem-percent">--</span>
+                    </div>
+                    <div class="progress mb-2" style="height:8px;">
+                        <div id="mem-bar" class="progress-bar" role="progressbar" style="width:0%"></div>
+                    </div>
+                    <div class="small text-muted d-flex justify-content-between">
+                        <span id="mem-used">--</span>
+                        <span id="mem-total">--</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="col-md-3">
+            <div class="card h-100">
+                <div class="card-body">
+                    <h6 class="card-title"><i class="bi bi-hdd-stack"></i> 磁盘</h6>
+                    <div class="d-flex justify-content-between mb-1">
+                        <span class="small text-muted">已用</span>
+                        <span class="small fw-bold" id="disk-percent">--</span>
+                    </div>
+                    <div class="progress mb-2" style="height:8px;">
+                        <div id="disk-bar" class="progress-bar" role="progressbar" style="width:0%"></div>
+                    </div>
+                    <div class="small text-muted d-flex justify-content-between">
+                        <span id="disk-used">--</span>
+                        <span id="disk-total">--</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="col-md-3">
+            <div class="card h-100">
+                <div class="card-body">
+                    <h6 class="card-title"><i class="bi bi-arrow-left-right"></i> 网络</h6>
+                    <div class="mb-2">
+                        <div class="d-flex justify-content-between small">
+                            <span class="text-muted">↓ 接收</span>
+                            <span id="net-rx" class="fw-bold">--</span>
+                        </div>
+                        <div class="d-flex justify-content-between small">
+                            <span class="text-muted">↑ 发送</span>
+                            <span id="net-tx" class="fw-bold">--</span>
+                        </div>
+                    </div>
+                    <hr class="my-2">
+                    <div class="row small text-muted g-0">
+                        <div class="col-6">开机</div>
+                        <div class="col-6 text-end" id="uptime">--</div>
+                    </div>
+                    <div class="row small text-muted g-0">
+                        <div class="col-6">进程</div>
+                        <div class="col-6 text-end" id="processes">--</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="row g-3 mt-1">
+        <div class="col-md-6">
+            <div class="card">
+                <div class="card-header py-2"><small class="fw-bold"><i class="bi bi-file-earmark-text"></i> 挂载点</small></div>
+                <div class="card-body p-0">
+                    <div class="table-responsive">
+                        <table class="table table-sm table-hover mb-0" id="disk-table">
+                            <thead class="table-light"><tr><th>挂载点</th><th>文件系统</th><th>总量</th><th>已用</th><th>可用</th><th>使用率</th></tr></thead>
+                            <tbody></tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-6">
+            <div class="card">
+                <div class="card-header py-2"><small class="fw-bold"><i class="bi bi-hdd"></i> 磁盘 I/O</small></div>
+                <div class="card-body p-0">
+                    <div class="table-responsive">
+                        <table class="table table-sm table-hover mb-0" id="io-table">
+                            <thead class="table-light"><tr><th>设备</th><th>读速率</th><th>写速率</th><th>IOPS (读/写)</th></tr></thead>
+                            <tbody></tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="row g-3 mt-1">
+        <div class="col-12">
+            <div class="card">
+                <div class="card-header py-2 d-flex justify-content-between align-items-center">
+                    <small class="fw-bold"><i class="bi bi-activity"></i> 进程</small>
+                    <small class="text-muted">TOP 10 by CPU</small>
+                </div>
+                <div class="card-body p-0">
+                    <div class="table-responsive">
+                        <table class="table table-sm table-hover mb-0" id="process-table">
+                            <thead class="table-light"><tr><th>PID</th><th>用户</th><th>CPU%</th><th>内存%</th><th>RSS</th><th>命令</th></tr></thead>
+                            <tbody></tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+function formatBytes(bytes) {
+    if (!bytes || bytes <= 0) return '0 B';
+    const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+    const i = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
+    return (bytes / Math.pow(1024, i)).toFixed(1) + ' ' + units[i];
+}
+
+function formatUptime(seconds) {
+    const d = Math.floor(seconds / 86400);
+    const h = Math.floor((seconds % 86400) / 3600);
+    const m = Math.floor((seconds % 3600) / 60);
+    if (d > 0) return `${d}d ${h}h ${m}m`;
+    if (h > 0) return `${h}h ${m}m`;
+    return `${m}m`;
+}
+
+function formatIO(bytes) {
+    if (!bytes || bytes <= 0) return '0';
+    const units = ['', 'K', 'M', 'G'];
+    const i = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
+    return (bytes / Math.pow(1024, i)).toFixed(1) + units[i] + '/s';
+}
+
+function barClass(pct) {
+    if (pct >= 90) return 'bg-danger';
+    if (pct >= 70) return 'bg-warning';
+    return 'bg-success';
+}
+
+function loadMonitor() {
+    fetch('/api/system/resources')
+        .then(r => r.json())
+        .then(d => {
+            if (!d.ok) return;
+            const r = d.resources;
+
+            // CPU
+            document.getElementById('cpu-percent').textContent = r.cpu.percent + '%';
+            document.getElementById('cpu-bar').style.width = r.cpu.percent + '%';
+            document.getElementById('cpu-bar').className = 'progress-bar ' + barClass(r.cpu.percent);
+            document.getElementById('cpu-load').textContent = r.cpu.load_1 + ' / ' + r.cpu.load_5 + ' / ' + r.cpu.load_15;
+
+            // Memory
+            const mem = r.memory;
+            document.getElementById('mem-percent').textContent = mem.percent + '%';
+            document.getElementById('mem-bar').style.width = mem.percent + '%';
+            document.getElementById('mem-bar').className = 'progress-bar ' + barClass(mem.percent);
+            document.getElementById('mem-used').textContent = formatBytes(mem.used);
+            document.getElementById('mem-total').textContent = formatBytes(mem.total);
+
+            // Disk (root)
+            const rootDisk = r.disks && r.disks.find(d => d.mount === '/') || (r.disks && r.disks[0]);
+            if (rootDisk) {
+                const dp = rootDisk.percent;
+                document.getElementById('disk-percent').textContent = dp + '%';
+                document.getElementById('disk-bar').style.width = dp + '%';
+                document.getElementById('disk-bar').className = 'progress-bar ' + barClass(dp);
+                document.getElementById('disk-used').textContent = formatBytes(rootDisk.used);
+                document.getElementById('disk-total').textContent = formatBytes(rootDisk.total);
+            }
+
+            // Network
+            document.getElementById('net-rx').textContent = formatBytes(r.network.rx) + '/s';
+            document.getElementById('net-tx').textContent = formatBytes(r.network.tx) + '/s';
+
+            // Uptime & processes
+            document.getElementById('uptime').textContent = formatUptime(r.system.uptime);
+            document.getElementById('processes').textContent = r.system.processes;
+
+            // Disk table
+            const diskTbody = document.querySelector('#disk-table tbody');
+            diskTbody.innerHTML = (r.disks || []).map(disk => `
+                <tr>
+                    <td>${disk.mount}</td>
+                    <td>${disk.fstype || '-'}</td>
+                    <td>${formatBytes(disk.total)}</td>
+                    <td>${formatBytes(disk.used)}</td>
+                    <td>${formatBytes(disk.free)}</td>
+                    <td><div class="progress" style="height:6px;width:80px;"><div class="progress-bar ${barClass(disk.percent)}" style="width:${disk.percent}%"></div></div> ${disk.percent}%</td>
+                </tr>
+            `).join('');
+
+            // IO table
+            const ioTbody = document.querySelector('#io-table tbody');
+            ioTbody.innerHTML = (r.io || []).map(io => `
+                <tr>
+                    <td>${io.device}</td>
+                    <td>${formatIO(io.read_bytes)}</td>
+                    <td>${formatIO(io.write_bytes)}</td>
+                    <td>${io.read_count}/s &nbsp; ${io.write_count}/s</td>
+                </tr>
+            `).join('');
+
+            // Process table
+            const procTbody = document.querySelector('#process-table tbody');
+            procTbody.innerHTML = (r.processes || []).map(p => `
+                <tr>
+                    <td>${p.pid}</td>
+                    <td>${p.user}</td>
+                    <td>${p.cpu_percent}</td>
+                    <td>${p.memory_percent}</td>
+                    <td>${formatBytes(p.rss)}</td>
+                    <td style="max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${p.cmdline}">${p.cmdline}</td>
+                </tr>
+            `).join('');
+        })
+        .catch(() => {});
+}
+
+loadMonitor();
+setInterval(loadMonitor, 10000);
+</script>
+{% endblock %}

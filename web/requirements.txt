@@ -10,3 +10,4 @@ pysocks>=1.7.1
 python-socks[asyncio]>=2.5.1
 qrcode>=8.0
 pillow>=10.0.0
+psutil>=5.9.0
