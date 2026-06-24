@@ -89,8 +89,13 @@ ENVEOF
       - name: Write SSH key for runner
         run: |
           mkdir -p ~/.ssh
-          echo "${{ secrets.EC2_SSH_KEY }}" > ~/.ssh/id_rsa
+          # Preserve newlines in the private key
+          printf "%s\n" "${{ secrets.EC2_SSH_KEY }}" > ~/.ssh/id_rsa
           chmod 600 ~/.ssh/id_rsa
+          # Add host to known_hosts to avoid interactive prompt
+          ssh-keyscan -H ${{ secrets.EC2_HOST }} >> ~/.ssh/known_hosts || true
+          # quick connectivity check (non-fatal)
+          ssh -i ~/.ssh/id_rsa -o BatchMode=yes -oStrictHostKeyChecking=no -oConnectTimeout=10 ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }} echo connected || true
 
       - name: Fetch remote deploy_logs via scp
         run: |
