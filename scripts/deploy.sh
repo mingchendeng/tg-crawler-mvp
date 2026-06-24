@@ -86,6 +86,13 @@ if [ -f crawler/requirements.txt ]; then
   "$PIP_BIN" install -r crawler/requirements.txt || true
 fi
 
+# Ensure crawler subdirectory has a .venv symlink (run-crawler.sh expects it)
+CRAWLER_VENV="$ROOT_DIR/crawler/.venv"
+if [ ! -L "$CRAWLER_VENV" ] || [ ! -d "$CRAWLER_VENV" ]; then
+  echo "Creating crawler/.venv symlink -> ../.venv"
+  ln -sf ../.venv "$CRAWLER_VENV"
+fi
+
 # Ensure systemd unit points to the .venv python/uvicorn and listens on 127.0.0.1
 SERVICE_PATH="/etc/systemd/system/tg-crawler-web.service"
 if [ -f "$SERVICE_PATH" ]; then
