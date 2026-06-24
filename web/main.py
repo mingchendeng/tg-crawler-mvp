@@ -135,6 +135,9 @@ S3_SECRET_KEY = os.getenv('S3_SECRET_KEY', '')
 S3_BUCKET = os.getenv('S3_BUCKET', 'tg-crawler-media-ffe95227')
 S3_REGION = os.getenv('S3_REGION', 'ap-east-1')
 S3_ENDPOINT = os.getenv('S3_ENDPOINT', '').strip() or None
+# For standard AWS S3 without explicit endpoint, build the regional endpoint to avoid signature mismatch
+if not S3_ENDPOINT:
+    S3_ENDPOINT = f'https://s3.{S3_REGION}.amazonaws.com'
 
 if S3_ACCESS_KEY and S3_SECRET_KEY:
     _s3_cfg = BotoConfig(signature_version='s3v4')
