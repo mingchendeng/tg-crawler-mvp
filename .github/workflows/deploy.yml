@@ -35,6 +35,9 @@ DATABASE_URL=${{ secrets.DATABASE_URL }}
 S3_ACCESS_KEY=${{ secrets.S3_ACCESS_KEY }}
 S3_SECRET_KEY=${{ secrets.S3_SECRET_KEY }}
 ADMIN_SECRET=${{ secrets.ADMIN_SECRET }}
+TG_API_ID=${{ secrets.TG_API_ID }}
+TG_API_HASH=${{ secrets.TG_API_HASH }}
+TG_PHONE=${{ secrets.TG_PHONE }}
 ENVEOF
             sudo mv /tmp/.env.deploy /opt/tg-crawler/.env
             sudo chown ubuntu:ubuntu /opt/tg-crawler/.env
