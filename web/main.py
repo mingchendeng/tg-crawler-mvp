@@ -198,6 +198,148 @@ def _parse_tags(raw: Optional[str]) -> Optional[List[str]]:
     return deduped or None
 
 
+PROVINCE_MAP = {
+    '上东': '山东', '安微': '安徽', '江浙': '跨省',
+    '山东省': '山东', '河南省': '河南', '浙江省': '浙江', '湖南省': '湖南',
+    '江苏省': '江苏', '安徽省': '安徽', '江西省': '江西', '四川省': '四川',
+    '福建省': '福建', '云南省': '云南', '河北省': '河北', '贵州省': '贵州',
+    '湖北省': '湖北', '陕西省': '陕西', '辽宁省': '辽宁', '吉林省': '吉林',
+    '甘肃省': '甘肃', '青海省': '青海', '黑龙江省': '黑龙江',
+    '广东省': '广东', '山西省': '山西', '海南省': '海南',
+}
+
+CITY_MAP = {
+    '广州': '广东', '深圳': '广东', '东莞': '广东', '佛山': '广东',
+    '珠海': '广东', '汕头': '广东', '惠州': '广东', '中山': '广东',
+    '江门': '广东', '茂名': '广东', '肇庆': '广东', '湛江': '广东',
+    '杭州': '浙江', '杭州拱墅': '浙江', '宁波': '浙江', '温州': '浙江',
+    '绍兴': '浙江', '嘉兴': '浙江', '金华': '浙江', '湖州': '浙江',
+    '台州': '浙江', '义乌': '浙江',
+    '南京': '江苏', '苏州': '江苏', '无锡': '江苏', '常州': '江苏',
+    '南通': '江苏', '徐州': '江苏', '扬州': '江苏', '镇江': '江苏',
+    '盐城': '江苏', '淮安': '江苏',
+    '成都': '四川', '绵阳': '四川', '宜宾': '四川',
+    '武汉': '湖北', '宜昌': '湖北',
+    '长沙': '湖南', '株洲': '湖南', '湘潭': '湖南',
+    '福州': '福建', '厦门': '福建', '泉州': '福建',
+    '合肥': '安徽', '芜湖': '安徽',
+    '济南': '山东', '青岛': '山东', '山东青岛': '山东', '临沂': '山东',
+    '淄博': '山东', '烟台': '山东',
+    '哈尔滨': '黑龙江',
+    '沈阳': '辽宁', '大连': '辽宁',
+    '长春': '吉林',
+    '石家庄': '河北', '唐山': '河北', '保定': '河北',
+    '郑州': '河南', '洛阳': '河南',
+    '太原': '山西',
+    '西安': '陕西', '咸阳': '陕西',
+    '兰州': '甘肃',
+    '昆明': '云南', '大理': '云南',
+    '贵阳': '贵州', '遵义': '贵州',
+    '南宁': '广西', '桂林': '广西',
+    '海口': '海南', '三亚': '海南',
+    '呼和浩特': '内蒙古',
+    '宁德': '福建',
+    '西宁': '青海',
+    '银川': '宁夏',
+    '乌鲁木齐': '新疆',
+    '拉萨': '西藏',
+}
+
+COUNTRY_NAMES = {'日本', '英国', '美国', '法国', '德国', '意大利', '西班牙',
+    '葡萄牙', '澳大利亚', '加拿大', '新加坡', '马来西亚', '泰国', '韩国',
+    '朝鲜', '印度', '越南', '吉隆坡', '迪拜'}
+
+
+def _build_province_reverse_map() -> Dict[str, List[str]]:
+    rev: Dict[str, List[str]] = {}
+    for raw, norm in PROVINCE_MAP.items():
+        rev.setdefault(norm, []).append(raw)
+    for raw, norm in CITY_MAP.items():
+        rev.setdefault(norm, []).append(raw)
+    for prov in list(rev.keys()):
+        if prov not in rev[prov]:
+            rev.setdefault(prov, []).append(prov)
+    for country in COUNTRY_NAMES:
+        rev.setdefault('海外', []).append(country)
+    for prefix in ['🏙', '城市：', '城市:']:
+        for raw, norm in list(PROVINCE_MAP.items()):
+            rev.setdefault(norm, []).append(prefix + raw)
+    return rev
+
+
+PROVINCE_REVERSE_MAP = _build_province_reverse_map()
+
+
+def _raw_values_for_normalized(norm: str) -> List[str]:
+    return PROVINCE_REVERSE_MAP.get(norm, [norm])
+
+
+def _normalize_province(raw: Optional[str]) -> Optional[str]:
+    if not raw:
+        return None
+    v = raw.strip()
+    if not v:
+        return None
+
+    # Strip emoji/prefix
+    for prefix in ['🏙', '城市：', '城市:']:
+        v = v.replace(prefix, '')
+    v = v.strip()
+
+    # Pure noise
+    if v in {'可', '可以', '否', '🉑'}:
+        return None
+
+    # Exact map
+    if v in PROVINCE_MAP:
+        return PROVINCE_MAP[v]
+
+    # Separate multi-province or province+country
+    separators = ['/', '／', ' ', '、']
+    parts = [p.strip() for p in re.split('|'.join(separators), v) if p.strip()]
+    if len(parts) > 1:
+        mapped = []
+        for part in parts:
+            m = _normalize_province(part)
+            if m:
+                mapped.append(m)
+        # Dedupe
+        unique = list(dict.fromkeys(mapped))
+        if len(unique) == 1:
+            return unique[0]
+        if len(unique) > 1:
+            if all(p in COUNTRY_NAMES for p in unique):
+                return '海外'
+            return '跨省'
+
+    # Extract suffix (e.g. "湖北YH1023" -> "湖北")
+    no_suffix = re.sub(r'[（(].*?[）)]$', '', v).strip()
+    no_suffix = re.sub(r'[A-Za-z0-9]+$', '', no_suffix).strip()
+    if no_suffix and no_suffix in PROVINCE_MAP:
+        return PROVINCE_MAP[no_suffix]
+    if no_suffix and no_suffix in CITY_MAP:
+        return CITY_MAP[no_suffix]
+
+    # Check remaining variants
+    if no_suffix in CITY_MAP:
+        return CITY_MAP[no_suffix]
+    if v in CITY_MAP:
+        return CITY_MAP[v]
+
+    # Country check
+    if v in COUNTRY_NAMES or no_suffix in COUNTRY_NAMES:
+        return '海外'
+
+    if '香港' in v:
+        return '香港'
+    if '澳门' in v:
+        return '澳门'
+    if '台湾' in v or '中国 台湾' in v:
+        return '台湾'
+
+    return None
+
+
 def _normalize_code(value: Optional[str]) -> Optional[str]:
     if value is None:
         return None
@@ -759,37 +901,16 @@ def _upsert_profile(db, msg_id: int, payload: Dict[str, Any]):
 @app.get('/', response_class=HTMLResponse)
 async def index(
     request: Request,
-    status: Optional[str] = Query(None),
     province: Optional[str] = Query(None),
-    city: Optional[str] = Query(None),
-    age_min: Optional[str] = Query(None),
-    age_max: Optional[str] = Query(None),
-    fee_min: Optional[str] = Query(None),
-    fee_max: Optional[str] = Query(None),
-    cup: Optional[str] = Query(None),
-    occupation: Optional[str] = Query(None),
-    confidence_min: Optional[str] = Query(None),
-    confidence_max: Optional[str] = Query(None),
-    has_media: Optional[str] = Query(None),
-    is_flagged: Optional[str] = Query(None),
+    liked: Optional[str] = Query(None),
+    blocked: Optional[str] = Query(None),
     keyword: Optional[str] = Query(None),
-    order_by: str = Query('telegram_date'),
-    order_dir: str = Query('desc'),
     page: int = Query(1, ge=1),
-    page_size: int = Query(20, ge=1, le=100),
+    page_size: int = Query(50, ge=1, le=200),
     db=Depends(get_db),
 ):
     user = get_current_user(request, db)
     runtime_status = _collect_runtime_status(db)
-
-    age_min_num = _parse_int(age_min)
-    age_max_num = _parse_int(age_max)
-    fee_min_num = _parse_float(fee_min)
-    fee_max_num = _parse_float(fee_max)
-    conf_min_num = _parse_float(confidence_min)
-    conf_max_num = _parse_float(confidence_max)
-    has_media_bool = _parse_bool(has_media)
-    flagged_bool = _parse_bool(is_flagged)
     page_size = _require_positive_page_size(page_size)
 
     age_expr = "COALESCE(p.age, CASE WHEN (m.extracted_json->>'age') ~ '^[0-9]+$' THEN (m.extracted_json->>'age')::int END)"
@@ -798,112 +919,28 @@ async def index(
     conditions = ['1=1']
     params: Dict[str, Any] = {}
     _append_message_scope(user, conditions, params, alias='m')
-    _append_message_scope(user, conditions, params, alias='m')
 
-    if status:
-        conditions.append('m.review_status = %(status)s')
-        params['status'] = status
     if province:
-        conditions.append("(p.province ILIKE %(province)s OR m.extracted_json->>'province' ILIKE %(province)s)")
-        params['province'] = f'%{province}%'
-    if city:
-        conditions.append("(p.city ILIKE %(city)s OR m.extracted_json->>'city' ILIKE %(city)s)")
-        params['city'] = f'%{city}%'
-    if age_min_num is not None:
-        conditions.append(f'{age_expr} >= %(age_min)s')
-        params['age_min'] = age_min_num
-    if age_max_num is not None:
-        conditions.append(f'{age_expr} <= %(age_max)s')
-        params['age_max'] = age_max_num
-    if fee_min_num is not None:
-        conditions.append(f'{fee_expr} >= %(fee_min)s')
-        params['fee_min'] = fee_min_num
-    if fee_max_num is not None:
-        conditions.append(f'{fee_expr} <= %(fee_max)s')
-        params['fee_max'] = fee_max_num
-    if cup:
-        conditions.append("COALESCE(p.cup_size, m.extracted_json->>'cup') ILIKE %(cup)s")
-        params['cup'] = f'%{cup}%'
-    if occupation:
-        conditions.append("COALESCE(p.occupation, m.extracted_json->>'occupation') ILIKE %(occ)s")
-        params['occ'] = f'%{occupation}%'
-    if conf_min_num is not None:
-        conditions.append('m.extract_confidence >= %(conf_min)s')
-        params['conf_min'] = conf_min_num
-    if conf_max_num is not None:
-        conditions.append('m.extract_confidence <= %(conf_max)s')
-        params['conf_max'] = conf_max_num
-    if has_media_bool is not None:
-        conditions.append('m.has_media = %(has_media)s')
-        params['has_media'] = has_media_bool
-    if flagged_bool is not None:
-        conditions.append('m.is_flagged = %(flagged)s')
-        params['flagged'] = flagged_bool
+        raw_values = _raw_values_for_normalized(province)
+        placeholders = ', '.join([f'%(prov_raw_{i})s' for i in range(len(raw_values))])
+        conditions.append(f"COALESCE(p.province, m.extracted_json->>'province') IN ({placeholders})")
+        for i, rv in enumerate(raw_values):
+            params[f'prov_raw_{i}'] = rv
+    if liked:
+        conditions.append('p.is_liked = true')
+    if blocked:
+        conditions.append('p.is_blocked = true')
     if keyword:
-        conditions.append("(m.text_content ILIKE %(kw)s OR m.extracted_json::text ILIKE %(kw)s OR EXISTS (SELECT 1 FROM media_files mf WHERE mf.message_id = m.id AND mf.ocr_text ILIKE %(kw)s))")
+        conditions.append("(m.text_content ILIKE %(kw)s OR m.extracted_json::text ILIKE %(kw)s OR COALESCE(p.display_nickname, '') ILIKE %(kw)s OR EXISTS (SELECT 1 FROM media_files mf WHERE mf.message_id = m.id AND mf.ocr_text ILIKE %(kw)s))")
         params['kw'] = f'%{keyword}%'
 
     where_clause = ' AND '.join(conditions)
 
-    allowed_orders = {
-        'telegram_date': 'm.telegram_date',
-        'extract_confidence': 'm.extract_confidence',
-        'created_at': 'm.created_at',
-        'introduction_fee': fee_expr,
-    }
-    sort_col = allowed_orders.get(order_by, 'm.telegram_date')
-    sort_dir = 'DESC' if order_dir.lower() == 'desc' else 'ASC'
-
-    summary_sql = f"""
-        SELECT
-            COUNT(*) AS total,
-            COUNT(*) FILTER (WHERE m.review_status = 'pending') AS pending,
-            COUNT(*) FILTER (WHERE m.review_status = 'approved') AS approved,
-            COUNT(*) FILTER (WHERE m.review_status = 'rejected') AS rejected,
-            COUNT(*) FILTER (WHERE m.review_status = 'need_review') AS need_review,
-            COUNT(*) FILTER (WHERE m.is_flagged = true) AS flagged,
-            COUNT(*) FILTER (WHERE m.has_media = true) AS with_media
-        FROM messages m
-        LEFT JOIN profiles p ON p.message_id = m.id
-        WHERE {where_clause}
-    """
-    filtered_stats = db_execute(db, summary_sql, dict(params)).fetchone()
-    total = filtered_stats['total']
-
-    overview_stats = db_execute(
-        db,
-        """
-        SELECT
-            COUNT(*) AS total,
-            COUNT(*) FILTER (WHERE review_status = 'pending') AS pending,
-            COUNT(*) FILTER (WHERE review_status = 'approved') AS approved,
-            COUNT(*) FILTER (WHERE review_status = 'rejected') AS rejected,
-            COUNT(*) FILTER (WHERE review_status = 'need_review') AS need_review,
-            COUNT(*) FILTER (WHERE is_flagged = true) AS flagged,
-            COUNT(*) FILTER (WHERE has_media = true) AS with_media,
-            COUNT(*) FILTER (WHERE created_at >= date_trunc('day', NOW())) AS today
-        FROM messages
-        """,
-    ).fetchone()
-
-    top_channels = db_execute(
-        db,
-        """
-        SELECT c.username, COUNT(*) AS cnt
-        FROM messages m
-        LEFT JOIN channels c ON c.id = m.channel_id
-        GROUP BY c.username
-        ORDER BY cnt DESC
-        LIMIT 6
-        """,
-    ).fetchall()
-
     offset = (page - 1) * page_size
     query_sql = f"""
         SELECT
-            m.id, m.telegram_message_id, m.telegram_date, m.text_content,
-            m.extract_confidence, m.review_status, m.is_flagged, m.has_media,
-            m.extracted_json, m.created_at, m.manual_tags,
+            m.id, m.telegram_message_id, m.telegram_date,
+            m.extracted_json,
             COALESCE(p.display_nickname, m.extracted_json->>'nickname') AS nickname,
             COALESCE(p.province, m.extracted_json->>'province') AS province,
             COALESCE(p.city, m.extracted_json->>'city') AS city,
@@ -915,56 +952,44 @@ async def index(
             {fee_expr} AS introduction_fee,
             COALESCE(p.monthly_allowance, CASE WHEN (m.extracted_json->>'monthly_allowance') ~ '^[0-9]+(\\.[0-9]+)?$' THEN (m.extracted_json->>'monthly_allowance')::numeric END) AS monthly_allowance,
             c.username AS channel_name,
+            m.text_content,
+            p.is_liked, p.is_blocked, p.id AS profile_id,
             (SELECT COUNT(*) FROM media_files WHERE message_id = m.id) AS media_count
         FROM messages m
         LEFT JOIN profiles p ON p.message_id = m.id
         LEFT JOIN channels c ON c.id = m.channel_id
         WHERE {where_clause}
-        ORDER BY {sort_col} {sort_dir}, m.id DESC
+        ORDER BY province ASC NULLS LAST, m.telegram_date DESC, m.id DESC
         LIMIT %(limit)s OFFSET %(offset)s
     """
     query_params = dict(params)
     query_params['limit'] = page_size
     query_params['offset'] = offset
     rows = db_execute(db, query_sql, query_params).fetchall()
+    for row in rows:
+        raw_prov = row.get('province')
+        row['province'] = _normalize_province(raw_prov)
 
-    provinces = db_execute(
+    total = db_execute(
         db,
-        """
-        SELECT DISTINCT COALESCE(p.province, m.extracted_json->>'province') AS p
+        f"""
+        SELECT COUNT(*) AS cnt
         FROM messages m
         LEFT JOIN profiles p ON p.message_id = m.id
-        WHERE COALESCE(p.province, m.extracted_json->>'province') IS NOT NULL
-        ORDER BY p
+        WHERE {where_clause}
         """,
-    ).fetchall()
+        dict(params),
+    ).fetchone()['cnt']
 
     total_pages = (total + page_size - 1) // page_size
-
     filter_values = {
-        'status': status or '',
         'province': province or '',
-        'city': city or '',
-        'age_min': age_min or '',
-        'age_max': age_max or '',
-        'fee_min': fee_min or '',
-        'fee_max': fee_max or '',
-        'cup': cup or '',
-        'occupation': occupation or '',
-        'confidence_min': confidence_min or '',
-        'confidence_max': confidence_max or '',
-        'has_media': 'true' if has_media_bool else '',
-        'is_flagged': 'true' if flagged_bool else '',
+        'liked': liked or '',
+        'blocked': blocked or '',
         'keyword': keyword or '',
-        'order_by': order_by,
-        'order_dir': order_dir,
         'page_size': page_size,
     }
-    page_query = _query_string(filter_values)
-
-    sort_latest_query = _query_string({**filter_values, 'order_by': 'telegram_date', 'order_dir': 'desc'})
-    sort_conf_query = _query_string({**filter_values, 'order_by': 'extract_confidence', 'order_dir': 'desc'})
-    sort_fee_query = _query_string({**filter_values, 'order_by': 'introduction_fee', 'order_dir': 'desc'})
+    page_query = _query_string({k: v for k, v in filter_values.items() if v})
 
     return templates.TemplateResponse(
         request=request,
@@ -973,15 +998,8 @@ async def index(
             'user': user,
             'rows': rows,
             'runtime_status': runtime_status,
-            'provinces': [r['p'] for r in provinces],
             'pagination': {'page': page, 'page_size': page_size, 'total': total, 'total_pages': total_pages},
             'filters': filter_values,
-            'stats_overview': overview_stats,
-            'stats_filtered': filtered_stats,
-            'top_channels': top_channels,
-            'sort_latest_query': sort_latest_query,
-            'sort_conf_query': sort_conf_query,
-            'sort_fee_query': sort_fee_query,
             'page_query': page_query,
         },
     )
@@ -2713,6 +2731,70 @@ async def s3_proxy(media_id: int, request: Request, db=Depends(get_db)):
     return RedirectResponse(url)
 
 
+@app.get('/api/provinces')
+async def get_provinces(request: Request, db=Depends(get_db)):
+    get_current_user(request, db)
+    rows = db_execute(
+        db,
+        """
+        SELECT COALESCE(p.province, m.extracted_json->>'province') AS raw
+        FROM profiles p
+        LEFT JOIN messages m ON m.id = p.message_id
+        WHERE COALESCE(p.province, m.extracted_json->>'province') IS NOT NULL
+          AND COALESCE(p.province, m.extracted_json->>'province') != ''
+        """,
+    ).fetchall()
+
+    counts: Dict[str, int] = {}
+    for r in rows:
+        norm = _normalize_province(r['raw'])
+        if norm:
+            counts[norm] = counts.get(norm, 0) + 1
+
+    sorted_provinces = sorted(counts.items(), key=lambda x: (-x[1], x[0]))
+    province_list = [{'name': name, 'count': cnt} for name, cnt in sorted_provinces]
+    return {'ok': True, 'provinces': province_list}
+
+
+@app.post('/api/profile/{profile_id}/like')
+async def toggle_like(profile_id: int, request: Request, db=Depends(get_db)):
+    user = get_current_user(request, db)
+    row = db_execute(db, 'SELECT id, is_liked FROM profiles WHERE id = %s', (profile_id,)).fetchone()
+    if not row:
+        raise HTTPException(404, '未找到')
+    new_val = not row['is_liked']
+    db_execute(db, 'UPDATE profiles SET is_liked = %s WHERE id = %s', (new_val, profile_id))
+    db.commit()
+    return {'ok': True, 'is_liked': new_val}
+
+
+@app.post('/api/profile/{profile_id}/block')
+async def toggle_block(profile_id: int, request: Request, db=Depends(get_db)):
+    user = get_current_user(request, db)
+    row = db_execute(db, 'SELECT id, is_blocked FROM profiles WHERE id = %s', (profile_id,)).fetchone()
+    if not row:
+        raise HTTPException(404, '未找到')
+    new_val = not row['is_blocked']
+    db_execute(db, 'UPDATE profiles SET is_blocked = %s WHERE id = %s', (new_val, profile_id))
+    db.commit()
+    return {'ok': True, 'is_blocked': new_val}
+
+
+@app.get('/api/profile/stats')
+async def profile_stats(request: Request, db=Depends(get_db)):
+    user = get_current_user(request, db)
+    row = db_execute(
+        db,
+        """
+        SELECT
+            COUNT(*) FILTER (WHERE is_liked = true) AS liked,
+            COUNT(*) FILTER (WHERE is_blocked = true) AS blocked
+        FROM profiles
+        """,
+    ).fetchone()
+    return {'ok': True, 'liked': row['liked'], 'blocked': row['blocked']}
+
+
 # ==================== Persons ====================
 
 
@@ -3037,6 +3119,11 @@ def _ensure_identity_schema(conn):
 
     cur.execute("ALTER TABLE media_files ADD COLUMN IF NOT EXISTS local_s3_url TEXT")
     cur.execute("ALTER TABLE media_files ADD COLUMN IF NOT EXISTS local_thumb_url TEXT")
+
+    cur.execute("ALTER TABLE profiles ADD COLUMN IF NOT EXISTS is_liked BOOLEAN DEFAULT FALSE")
+    cur.execute("ALTER TABLE profiles ADD COLUMN IF NOT EXISTS is_blocked BOOLEAN DEFAULT FALSE")
+    cur.execute("ALTER TABLE persons ADD COLUMN IF NOT EXISTS is_liked BOOLEAN DEFAULT FALSE")
+    cur.execute("ALTER TABLE persons ADD COLUMN IF NOT EXISTS is_blocked BOOLEAN DEFAULT FALSE")
 
     conn.commit()
     cur.close()

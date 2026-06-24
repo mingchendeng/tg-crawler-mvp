@@ -1,353 +1,147 @@
 {% extends "base.html" %}
 {% block title %}消息列表 - TG Crawler{% endblock %}
 {% block content %}
-<div class="row g-3 mb-2">
-    <div class="col-6 col-md-3 col-xl-2">
-        <div class="card"><div class="card-body py-2"><div class="text-muted small">总消息</div><div class="h5 mb-0">{{ stats_overview.total }}</div></div></div>
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <div>
+        {% if filters.province %}
+        <span class="badge bg-primary me-1">省份: {{ filters.province }}</span>
+        <a href="/?keyword={{ filters.keyword }}" class="btn btn-sm btn-outline-secondary">✕ 清除</a>
+        {% elif filters.liked %}
+        <span class="badge bg-danger me-1">❤ 喜欢</span>
+        <a href="/" class="btn btn-sm btn-outline-secondary">✕ 清除</a>
+        {% elif filters.blocked %}
+        <span class="badge bg-dark me-1">✋ 拉黑</span>
+        <a href="/" class="btn btn-sm btn-outline-secondary">✕ 清除</a>
+        {% endif %}
+        <span class="text-muted small ms-2">共 {{ pagination.total }} 条</span>
     </div>
-    <div class="col-6 col-md-3 col-xl-2">
-        <div class="card"><div class="card-body py-2"><div class="text-muted small">待审核</div><div class="h5 mb-0 text-warning">{{ stats_overview.pending }}</div></div></div>
-    </div>
-    <div class="col-6 col-md-3 col-xl-2">
-        <div class="card"><div class="card-body py-2"><div class="text-muted small">已通过</div><div class="h5 mb-0 text-success">{{ stats_overview.approved }}</div></div></div>
-    </div>
-    <div class="col-6 col-md-3 col-xl-2">
-        <div class="card"><div class="card-body py-2"><div class="text-muted small">需复核/拒绝</div><div class="h5 mb-0 text-danger">{{ stats_overview.need_review + stats_overview.rejected }}</div></div></div>
-    </div>
-    <div class="col-6 col-md-3 col-xl-2">
-        <div class="card"><div class="card-body py-2"><div class="text-muted small">已标记</div><div class="h5 mb-0">{{ stats_overview.flagged }}</div></div></div>
-    </div>
-    <div class="col-6 col-md-3 col-xl-2">
-        <div class="card"><div class="card-body py-2"><div class="text-muted small">今日新增</div><div class="h5 mb-0">{{ stats_overview.today }}</div></div></div>
-    </div>
+    <form method="get" class="d-flex gap-2 align-items-center">
+        {% if filters.province %}<input type="hidden" name="province" value="{{ filters.province }}">{% endif %}
+        {% if filters.liked %}<input type="hidden" name="liked" value="1">{% endif %}
+        {% if filters.blocked %}<input type="hidden" name="blocked" value="1">{% endif %}
+        <input type="text" name="keyword" class="form-control form-control-sm" style="width:200px" value="{{ filters.keyword }}" placeholder="关键词搜索">
+        <select name="page_size" class="form-select form-select-sm" style="width:80px" onchange="this.form.submit()">
+            <option value="50" {% if pagination.page_size == 50 %}selected{% endif %}>50</option>
+            <option value="100" {% if pagination.page_size == 100 %}selected{% endif %}>100</option>
+            <option value="200" {% if pagination.page_size == 200 %}selected{% endif %}>200</option>
+        </select>
+        <button type="submit" class="btn btn-primary btn-sm">搜索</button>
+    </form>
 </div>
 
-<div class="card mb-3">
-    <div class="card-body py-2">
-        <div class="d-flex flex-wrap justify-content-between align-items-center gap-2">
-            <div class="small">
-                <span class="fw-bold me-2">采集链路</span>
-                <span id="pipelineStatusBadge" class="badge {% if runtime_status.ready.crawler_pipeline %}bg-success{% else %}bg-warning text-dark{% endif %}">
-                    {{ '已就绪' if runtime_status.ready.crawler_pipeline else '未就绪' }}
-                </span>
-                <span id="pipelineDb" class="text-muted ms-2">DB: {{ 'OK' if runtime_status.database.reachable else 'DOWN' }}</span>
-                <span id="pipelineProxy" class="text-muted ms-2">Proxy: {{ 'OK' if runtime_status.services.proxy.running else 'DOWN' }}</span>
-                <span id="pipelineCrawler" class="text-muted ms-2">Crawler: {{ 'RUNNING' if runtime_status.services.crawler.running else 'STOPPED' }}</span>
-            </div>
-            {% if user.role == 'admin' %}
-            <div class="d-flex gap-2">
-                <button class="btn btn-sm btn-primary" type="button" onclick="quickStartPipeline(this)">一键启动采集链路</button>
-                <a href="/ops" class="btn btn-sm btn-outline-secondary">系统控制台</a>
-            </div>
-            {% endif %}
-        </div>
-    </div>
-</div>
-
-<div class="row">
-    <div class="col-12">
-        <div class="card mb-3">
-            <div class="card-body">
-                <form method="get" class="row g-2 align-items-end">
-                    <input type="hidden" name="order_by" value="{{ filters.order_by }}">
-                    <input type="hidden" name="order_dir" value="{{ filters.order_dir }}">
-                    <div class="col-md-2">
-                        <label class="form-label small fw-bold">审核状态</label>
-                        <select name="status" class="form-select form-select-sm">
-                            <option value="">全部</option>
-                            <option value="pending" {% if filters.status=='pending' %}selected{% endif %}>待审核</option>
-                            <option value="approved" {% if filters.status=='approved' %}selected{% endif %}>已通过</option>
-                            <option value="rejected" {% if filters.status=='rejected' %}selected{% endif %}>已拒绝</option>
-                            <option value="need_review" {% if filters.status=='need_review' %}selected{% endif %}>需复核</option>
-                        </select>
-                    </div>
-                    <div class="col-md-2">
-                        <label class="form-label small fw-bold">省份</label>
-                        <select name="province" class="form-select form-select-sm">
-                            <option value="">全部</option>
-                            {% for p in provinces %}
-                            <option value="{{ p }}" {% if filters.province==p %}selected{% endif %}>{{ p }}</option>
-                            {% endfor %}
-                        </select>
-                    </div>
-                    <div class="col-md-2">
-                        <label class="form-label small fw-bold">城市</label>
-                        <input type="text" name="city" class="form-control form-control-sm" value="{{ filters.city }}" placeholder="模糊搜索">
-                    </div>
-                    <div class="col-md-2">
-                        <label class="form-label small fw-bold">年龄范围</label>
-                        <div class="input-group input-group-sm">
-                            <input type="number" name="age_min" class="form-control" value="{{ filters.age_min }}" placeholder="min">
-                            <span class="input-group-text">-</span>
-                            <input type="number" name="age_max" class="form-control" value="{{ filters.age_max }}" placeholder="max">
-                        </div>
-                    </div>
-                    <div class="col-md-2">
-                        <label class="form-label small fw-bold">介绍费范围</label>
-                        <div class="input-group input-group-sm">
-                            <input type="number" name="fee_min" class="form-control" value="{{ filters.fee_min }}" placeholder="min">
-                            <span class="input-group-text">-</span>
-                            <input type="number" name="fee_max" class="form-control" value="{{ filters.fee_max }}" placeholder="max">
-                        </div>
-                    </div>
-                    <div class="col-md-2">
-                        <label class="form-label small fw-bold">罩杯</label>
-                        <input type="text" name="cup" class="form-control form-control-sm" value="{{ filters.cup }}" placeholder="如 C/D">
-                    </div>
-                    <div class="col-md-2">
-                        <label class="form-label small fw-bold">职业</label>
-                        <input type="text" name="occupation" class="form-control form-control-sm" value="{{ filters.occupation }}" placeholder="模糊搜索">
-                    </div>
-                    <div class="col-md-2">
-                        <label class="form-label small fw-bold">置信度</label>
-                        <div class="input-group input-group-sm">
-                            <input type="number" step="0.1" name="confidence_min" class="form-control" value="{{ filters.confidence_min }}" placeholder="min">
-                            <span class="input-group-text">-</span>
-                            <input type="number" step="0.1" name="confidence_max" class="form-control" value="{{ filters.confidence_max }}" placeholder="max">
-                        </div>
-                    </div>
-                    <div class="col-md-2">
-                        <label class="form-label small fw-bold">关键词</label>
-                        <input type="text" name="keyword" class="form-control form-control-sm" value="{{ filters.keyword }}" placeholder="全文 / OCR">
-                    </div>
-                    <div class="col-md-2">
-                        <label class="form-label small fw-bold">每页</label>
-                        <select name="page_size" class="form-select form-select-sm">
-                            <option value="20" {% if filters.page_size == 20 %}selected{% endif %}>20</option>
-                            <option value="50" {% if filters.page_size == 50 %}selected{% endif %}>50</option>
-                            <option value="100" {% if filters.page_size == 100 %}selected{% endif %}>100</option>
-                        </select>
-                    </div>
-                    <div class="col-md-2">
-                        <div class="form-check">
-                            <input class="form-check-input" type="checkbox" name="has_media" value="true" id="chkMedia" {% if filters.has_media == 'true' %}checked{% endif %}>
-                            <label class="form-check-label small" for="chkMedia">有媒体</label>
-                        </div>
-                        <div class="form-check">
-                            <input class="form-check-input" type="checkbox" name="is_flagged" value="true" id="chkFlag" {% if filters.is_flagged == 'true' %}checked{% endif %}>
-                            <label class="form-check-label small" for="chkFlag">可疑标记</label>
-                        </div>
-                    </div>
-                    <div class="col-md-2">
-                        <button type="submit" class="btn btn-primary btn-sm w-100">筛选</button>
-                        <a href="/" class="btn btn-outline-secondary btn-sm w-100 mt-1">重置</a>
-                    </div>
-                </form>
-            </div>
-        </div>
-
-        <div class="d-flex flex-wrap justify-content-between align-items-center mb-2 gap-2">
-            <span class="text-muted small">
-                当前筛选 <strong>{{ stats_filtered.total }}</strong> 条（待审核 {{ stats_filtered.pending }} / 可疑 {{ stats_filtered.flagged }} / 含媒体 {{ stats_filtered.with_media }}）
-            </span>
-            <div class="btn-group btn-group-sm">
-                <a href="/?{{ sort_latest_query }}" class="btn btn-outline-secondary {% if filters.order_by=='telegram_date' and filters.order_dir=='desc' %}active{% endif %}">最新</a>
-                <a href="/?{{ sort_conf_query }}" class="btn btn-outline-secondary {% if filters.order_by=='extract_confidence' %}active{% endif %}">置信度</a>
-                <a href="/?{{ sort_fee_query }}" class="btn btn-outline-secondary {% if filters.order_by=='introduction_fee' %}active{% endif %}">介绍费</a>
-            </div>
-        </div>
-
-        <div class="card mb-2">
-            <div class="card-body py-2">
-                <div class="row g-2 align-items-end">
-                    <div class="col-md-2">
-                        <label class="form-label small fw-bold">批量状态</label>
-                        <select id="bulkStatus" class="form-select form-select-sm">
-                            <option value="pending">待审核</option>
-                            <option value="approved">已通过</option>
-                            <option value="rejected">已拒绝</option>
-                            <option value="need_review">需复核</option>
-                        </select>
-                    </div>
-                    <div class="col-md-3">
-                        <label class="form-label small fw-bold">批量备注</label>
-                        <input id="bulkNotes" class="form-control form-control-sm" placeholder="可选">
-                    </div>
-                    <div class="col-md-2">
-                        <label class="form-label small fw-bold">批量标签</label>
-                        <input id="bulkTags" class="form-control form-control-sm" placeholder="逗号分隔">
-                    </div>
-                    <div class="col-md-2">
-                        <div class="form-check mt-4">
-                            <input class="form-check-input" type="checkbox" id="bulkFlagged">
-                            <label class="form-check-label small" for="bulkFlagged">标记可疑</label>
-                        </div>
-                    </div>
-                    <div class="col-md-3 text-end">
-                        <button class="btn btn-sm btn-outline-secondary" type="button" onclick="toggleAllRows(true)">全选</button>
-                        <button class="btn btn-sm btn-outline-secondary" type="button" onclick="toggleAllRows(false)">清空</button>
-                        <button class="btn btn-sm btn-primary" type="button" onclick="submitBulkReview(this)">批量更新</button>
-                    </div>
-                </div>
-            </div>
-        </div>
-
-        <div class="card">
-            <div class="table-responsive">
-                <table class="table table-hover table-sm align-middle mb-0">
-                    <thead class="table-light">
-                        <tr>
-                            <th style="width:30px;"><input id="checkAll" type="checkbox" onchange="toggleAllRows(this.checked)"></th>
-                            <th>ID</th>
-                            <th>时间</th>
-                            <th>频道</th>
-                            <th>昵称/编号</th>
-                            <th>地区</th>
-                            <th>年龄</th>
-                            <th>身高/体重</th>
-                            <th>职业</th>
-                            <th>介绍费</th>
-                            <th>标签</th>
-                            <th>置信度</th>
-                            <th>媒体</th>
-                            <th>状态</th>
-                            <th>操作</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        {% for row in rows %}
-                        <tr class="{% if row.is_flagged %}table-danger{% endif %}">
-                            <td><input class="row-check" type="checkbox" value="{{ row.id }}"></td>
-                            <td class="small text-muted">{{ row.telegram_message_id }}</td>
-                            <td class="small">{{ row.telegram_date.strftime('%m-%d %H:%M') if row.telegram_date else '-' }}</td>
-                            <td><span class="badge bg-secondary">{{ row.channel_name }}</span></td>
-                            <td>
-                                <div class="fw-bold">{{ row.nickname or '-' }}</div>
-                                {% if row.extracted_json and row.extracted_json.get('code') %}
-                                <div class="small text-muted">{{ row.extracted_json.code }}</div>
-                                {% endif %}
-                            </td>
-                            <td>{{ row.province or '-' }} {{ row.city or '' }}</td>
-                            <td>{{ row.age or '-' }}</td>
-                            <td>{{ row.height or '?' }}/{{ row.weight or '?' }}</td>
-                            <td>{{ row.occupation or '-' }}</td>
-                            <td>{% if row.introduction_fee %}<span class="text-danger fw-bold">{{ "%.0f"|format(row.introduction_fee) }}</span>{% else %}-{% endif %}</td>
-                            <td>
-                                {% if row.manual_tags %}
-                                    {% for tag in row.manual_tags %}
-                                    <span class="badge bg-dark">{{ tag }}</span>
-                                    {% endfor %}
-                                {% else %}
-                                -
-                                {% endif %}
-                            </td>
-                            <td>
-                                {% set conf = row.extract_confidence or 0 %}
-                                <span class="badge {% if conf > 0.7 %}badge-confidence-high{% elif conf > 0.4 %}badge-confidence-mid{% else %}badge-confidence-low{% endif %}">
-                                    {{ "%.0f%%"|format(conf*100) }}
-                                </span>
-                            </td>
-                            <td>{% if row.media_count > 0 %}<span class="badge bg-info" style="cursor:pointer" onclick="previewMessageMedia({{ row.id }})">{{ row.media_count }}</span>{% else %}-{% endif %}</td>
-                            <td>
-                                <span class="badge bg-{{ 'secondary' if row.review_status=='pending' else ('success' if row.review_status=='approved' else ('danger' if row.review_status=='rejected' else 'warning')) }}">
-                                    {{ row.review_status }}
-                                </span>
-                            </td>
-                            <td><a href="/detail/{{ row.id }}" class="btn btn-sm btn-outline-primary">详情</a></td>
-                        </tr>
-                        {% endfor %}
-                        {% if not rows %}
-                        <tr><td colspan="15" class="text-center text-muted py-4">没有匹配记录</td></tr>
+<div class="card">
+    <div class="table-responsive">
+        <table class="table table-hover table-sm align-middle mb-0">
+            <thead class="table-light">
+                <tr>
+                    <th>昵称/编号</th>
+                    <th>地区</th>
+                    <th>年龄</th>
+                    <th>身高/体重</th>
+                    <th>职业</th>
+                    <th>介绍费</th>
+                    <th>时间</th>
+                    <th>频道</th>
+                    <th>媒体</th>
+                    <th>操作</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% set last_province = namespace(value='') %}
+                {% for row in rows %}
+                {% set province_name = row.province or '' %}
+                {% if province_name and province_name != last_province.value %}
+                <tr class="table-secondary">
+                    <td colspan="10" class="small fw-bold py-1" style="background:#e9ecef;">
+                        ─ {{ province_name }} ─
+                    </td>
+                </tr>
+                {% set last_province.value = province_name %}
+                {% endif %}
+                <tr>
+                    <td>
+                        <div class="fw-bold">{{ row.nickname or '-' }}</div>
+                        {% if row.extracted_json and row.extracted_json.get('code') %}
+                        <div class="small text-muted">{{ row.extracted_json.code }}</div>
                         {% endif %}
-                    </tbody>
-                </table>
-            </div>
-        </div>
-
-        {% if top_channels %}
-        <div class="mt-2 text-muted small">
-            高频频道：
-            {% for c in top_channels %}
-            <span class="badge bg-light text-dark">{{ c.username or '-' }} {{ c.cnt }}</span>
-            {% endfor %}
-        </div>
-        {% endif %}
-
-        {% if pagination.total_pages > 1 %}
-        <nav class="mt-3">
-            <ul class="pagination pagination-sm justify-content-center">
-                {% if pagination.page > 1 %}
-                <li class="page-item"><a class="page-link" href="/?page={{ pagination.page-1 }}{% if page_query %}&{{ page_query }}{% endif %}">上一页</a></li>
-                {% endif %}
-                {% for p in range(1, pagination.total_pages+1) %}
-                {% if p == pagination.page or (p >= pagination.page-2 and p <= pagination.page+2) or p == 1 or p == pagination.total_pages %}
-                <li class="page-item {% if p == pagination.page %}active{% endif %}">
-                    <a class="page-link" href="/?page={{ p }}{% if page_query %}&{{ page_query }}{% endif %}">{{ p }}</a>
-                </li>
-                {% elif p == pagination.page-3 or p == pagination.page+3 %}
-                <li class="page-item disabled"><span class="page-link">...</span></li>
-                {% endif %}
+                    </td>
+                    <td>{{ row.province or '-' }} {{ row.city or '' }}</td>
+                    <td>{{ row.age or '-' }}</td>
+                    <td>{{ row.height or '?' }}/{{ row.weight or '?' }}</td>
+                    <td>{{ row.occupation or '-' }}</td>
+                    <td>{% if row.introduction_fee %}<span class="text-danger fw-bold">{{ "%.0f"|format(row.introduction_fee) }}</span>{% else %}-{% endif %}</td>
+                    <td class="small">{{ row.telegram_date.strftime('%m-%d %H:%M') if row.telegram_date else '-' }}</td>
+                    <td><span class="badge bg-secondary">{{ row.channel_name }}</span></td>
+                    <td>{% if row.media_count > 0 %}<span class="badge bg-info" style="cursor:pointer" onclick="previewMessageMedia({{ row.id }})">{{ row.media_count }}</span>{% else %}-{% endif %}</td>
+                    <td class="text-nowrap">
+                        <a href="/detail/{{ row.id }}" class="btn btn-sm btn-outline-primary me-1">详情</a>
+                        <button class="btn btn-sm {% if row.is_liked %}btn-danger{% else %}btn-outline-danger{% endif %} like-btn" data-profile-id="{{ row.profile_id }}" onclick="toggleLike(this)">❤</button>
+                        <button class="btn btn-sm {% if row.is_blocked %}btn-dark{% else %}btn-outline-dark{% endif %} block-btn" data-profile-id="{{ row.profile_id }}" onclick="toggleBlock(this)">✋</button>
+                    </td>
+                </tr>
+                {% else %}
+                <tr><td colspan="10" class="text-center text-muted py-4">没有匹配记录</td></tr>
                 {% endfor %}
-                {% if pagination.page < pagination.total_pages %}
-                <li class="page-item"><a class="page-link" href="/?page={{ pagination.page+1 }}{% if page_query %}&{{ page_query }}{% endif %}">下一页</a></li>
-                {% endif %}
-            </ul>
-        </nav>
-        {% endif %}
+            </tbody>
+        </table>
     </div>
 </div>
+
+{% if pagination.total_pages > 1 %}
+<nav class="mt-3">
+    <ul class="pagination pagination-sm justify-content-center">
+        {% if pagination.page > 1 %}
+        <li class="page-item"><a class="page-link" href="/?page={{ pagination.page-1 }}{% if page_query %}&{{ page_query }}{% endif %}">上一页</a></li>
+        {% endif %}
+        {% for p in range(1, pagination.total_pages+1) %}
+        {% if p == pagination.page or (p >= pagination.page-2 and p <= pagination.page+2) or p == 1 or p == pagination.total_pages %}
+        <li class="page-item {% if p == pagination.page %}active{% endif %}">
+            <a class="page-link" href="/?page={{ p }}{% if page_query %}&{{ page_query }}{% endif %}">{{ p }}</a>
+        </li>
+        {% elif p == pagination.page-3 or p == pagination.page+3 %}
+        <li class="page-item disabled"><span class="page-link">...</span></li>
+        {% endif %}
+        {% endfor %}
+        {% if pagination.page < pagination.total_pages %}
+        <li class="page-item"><a class="page-link" href="/?page={{ pagination.page+1 }}{% if page_query %}&{{ page_query }}{% endif %}">下一页</a></li>
+        {% endif %}
+    </ul>
+</nav>
+{% endif %}
 {% endblock %}
 
 {% block extra_js %}
 <script>
-function toggleAllRows(checked) {
-    document.getElementById('checkAll').checked = checked;
-    document.querySelectorAll('.row-check').forEach((el) => {
-        el.checked = checked;
-    });
-}
-
-function getSelectedIds() {
-    return Array.from(document.querySelectorAll('.row-check:checked')).map((el) => Number(el.value));
-}
-
-async function submitBulkReview(btn) {
-    const ids = getSelectedIds();
-    if (ids.length === 0) {
-        showToast('请先选择至少一条消息', 'danger');
-        return;
+async function toggleLike(btn) {
+    const profileId = btn.dataset.profileId;
+    if (!profileId) return;
+    try {
+        const resp = await fetch('/api/profile/' + profileId + '/like', { method: 'POST' });
+        const data = await resp.json();
+        if (data.ok) {
+            btn.className = 'btn btn-sm ' + (data.is_liked ? 'btn-danger' : 'btn-outline-danger');
+            showToast(data.is_liked ? '已标记喜欢' : '取消喜欢');
+        }
+    } catch (e) {
+        showToast('操作失败', 'danger');
     }
-
-    showLoading(btn);
-    const data = new FormData();
-    data.append('message_ids', JSON.stringify(ids));
-    data.append('review_status', document.getElementById('bulkStatus').value);
-    data.append('review_notes', document.getElementById('bulkNotes').value);
-    data.append('manual_tags', document.getElementById('bulkTags').value);
-    data.append('is_flagged', document.getElementById('bulkFlagged').checked ? 'true' : 'false');
-
-    const resp = await fetch('/api/messages/bulk-review', {
-        method: 'POST',
-        body: data,
-    });
-    const payload = await resp.json();
-    hideLoading(btn, '批量更新');
-    if (!resp.ok) {
-        showToast(payload.detail || '批量更新失败，请检查日志', 'danger');
-        return;
-    }
-
-    showToast(`批量更新成功：${payload.updated} 条`, 'success');
-    setTimeout(() => location.reload(), 500);
 }
 
-async function quickStartPipeline(btn) {
-    showLoading(btn);
-    const resp = await fetch('/api/system/start-all', { method: 'POST' });
-    const payload = await resp.json();
-    hideLoading(btn, '一键启动采集链路');
-    if (!resp.ok || !payload.ok) {
-        const errors = (payload.errors || []).join(' | ') || '启动失败';
-        showToast(errors, 'danger');
-        return;
+async function toggleBlock(btn) {
+    const profileId = btn.dataset.profileId;
+    if (!profileId) return;
+    try {
+        const resp = await fetch('/api/profile/' + profileId + '/block', { method: 'POST' });
+        const data = await resp.json();
+        if (data.ok) {
+            btn.className = 'btn btn-sm ' + (data.is_blocked ? 'btn-dark' : 'btn-outline-dark');
+            showToast(data.is_blocked ? '已拉黑' : '取消拉黑');
+        }
+    } catch (e) {
+        showToast('操作失败', 'danger');
     }
-
-    const actions = (payload.actions || []).join(', ');
-    showToast(`启动完成：${actions}`, 'success');
-    setTimeout(() => location.reload(), 700);
 }
 
-// Preview media from list page (lazy load via API)
 async function previewMessageMedia(msgId) {
     try {
         const resp = await fetch('/api/messages/' + msgId + '/media');
@@ -362,7 +156,6 @@ async function previewMessageMedia(msgId) {
     }
 }
 
-// Dynamic pipeline status refresh every 15s
 async function refreshPipelineStatus() {
     try {
         const resp = await fetch('/api/system/status');
@@ -375,24 +168,8 @@ async function refreshPipelineStatus() {
             badge.className = 'badge ' + (ready ? 'bg-success' : 'bg-warning text-dark');
             badge.textContent = ready ? '已就绪' : '未就绪';
         }
-        const dbEl = document.getElementById('pipelineDb');
-        const proxyEl = document.getElementById('pipelineProxy');
-        const crawlerEl = document.getElementById('pipelineCrawler');
-        if (dbEl) {
-            dbEl.textContent = 'DB: ' + (s.database.reachable ? 'OK' : 'DOWN');
-            dbEl.className = 'text-muted ms-2' + (s.database.reachable ? '' : ' text-danger');
-        }
-        if (proxyEl) {
-            proxyEl.textContent = 'Proxy: ' + (s.services.proxy.running ? 'OK' : 'DOWN');
-            proxyEl.className = 'text-muted ms-2' + (s.services.proxy.running ? '' : ' text-danger');
-        }
-        if (crawlerEl) {
-            crawlerEl.textContent = 'Crawler: ' + (s.services.crawler.running ? 'RUNNING' : 'STOPPED');
-            crawlerEl.className = 'text-muted ms-2' + (s.services.crawler.running ? '' : ' text-danger');
-        }
     } catch (_) {}
 }
-
 setInterval(refreshPipelineStatus, 15000);
 </script>
 {% endblock %}

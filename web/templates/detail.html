@@ -2,7 +2,13 @@
 {% block title %}详情 #{{ msg.id }} - TG Crawler{% endblock %}
 {% block content %}
 <div class="d-flex justify-content-between align-items-center mb-2">
-    <a href="/" class="btn btn-sm btn-outline-secondary">返回列表</a>
+    <div>
+        <a href="/" class="btn btn-sm btn-outline-secondary">返回列表</a>
+        {% if profile %}
+        <button class="btn btn-sm {% if profile.is_liked %}btn-danger{% else %}btn-outline-danger{% endif %} ms-2" onclick="toggleDetailLike()">❤ {% if profile.is_liked %}已喜欢{% else %}喜欢{% endif %}</button>
+        <button class="btn btn-sm {% if profile.is_blocked %}btn-dark{% else %}btn-outline-dark{% endif %}" onclick="toggleDetailBlock()">✋ {% if profile.is_blocked %}已拉黑{% else %}拉黑{% endif %}</button>
+        {% endif %}
+    </div>
     <div class="btn-group btn-group-sm">
         {% if prev_msg_id %}<a class="btn btn-outline-secondary" href="/detail/{{ prev_msg_id }}">上一条</a>{% endif %}
         {% if next_msg_id %}<a class="btn btn-outline-secondary" href="/detail/{{ next_msg_id }}">下一条</a>{% endif %}
@@ -14,10 +20,7 @@
         <div class="card mb-3">
             <div class="card-header d-flex justify-content-between align-items-center">
                 <span>消息详情 <span class="text-muted">#{{ msg.telegram_message_id }}</span></span>
-                <div class="d-flex gap-2">
-                    <span class="badge bg-secondary">{{ msg.channel_name }}</span>
-                    {% if msg.is_flagged %}<span class="badge bg-danger">已标记可疑</span>{% endif %}
-                </div>
+                <span class="badge bg-secondary">{{ msg.channel_name }}</span>
             </div>
             <div class="card-body">
                 <div class="row mb-3">
@@ -25,12 +28,6 @@
                         <table class="table table-borderless table-sm">
                             <tr><td class="text-muted w-25">采集时间</td><td>{{ msg.created_at }}</td></tr>
                             <tr><td class="text-muted">消息时间</td><td>{{ msg.telegram_date }}</td></tr>
-                            <tr><td class="text-muted">置信度</td><td>
-                                <span class="badge {% if msg.extract_confidence > 0.7 %}bg-success{% elif msg.extract_confidence > 0.4 %}bg-warning text-dark{% else %}bg-danger{% endif %}">
-                                    {{ "%.0f%%"|format((msg.extract_confidence or 0)*100) }}
-                                </span>
-                            </td></tr>
-                            <tr><td class="text-muted">审核状态</td><td><span class="badge bg-primary">{{ msg.review_status or 'pending' }}</span></td></tr>
                         </table>
                     </div>
                     <div class="col-md-6">
@@ -133,44 +130,8 @@
     </div>
 
     <div class="col-md-4">
-        <div class="card sticky-review mb-3">
-            <div class="card-header bg-primary text-white fw-bold">审核操作</div>
-            <div class="card-body">
-                <form id="reviewForm" onsubmit="submitReview(event)">
-                    <div class="mb-3">
-                        <label class="form-label">审核状态</label>
-                        <select name="review_status" id="r_status" class="form-select">
-                            <option value="pending" {% if msg.review_status=='pending' %}selected{% endif %}>待审核</option>
-                            <option value="approved" {% if msg.review_status=='approved' %}selected{% endif %}>已通过</option>
-                            <option value="rejected" {% if msg.review_status=='rejected' %}selected{% endif %}>已拒绝</option>
-                            <option value="need_review" {% if msg.review_status=='need_review' %}selected{% endif %}>需复核</option>
-                        </select>
-                    </div>
-                    <div class="mb-3">
-                        <label class="form-label">备注</label>
-                        <textarea name="review_notes" id="r_notes" class="form-control" rows="3">{{ msg.review_notes or '' }}</textarea>
-                    </div>
-                    <div class="mb-3">
-                        <label class="form-label">标签（逗号分隔）</label>
-                        <input type="text" name="manual_tags" id="r_tags" class="form-control" value="{{ msg.manual_tags|join(', ') if msg.manual_tags else '' }}">
-                    </div>
-                    <div class="mb-3 form-check">
-                        <input class="form-check-input" type="checkbox" id="r_flagged" {% if msg.is_flagged %}checked{% endif %}>
-                        <label class="form-check-label text-danger" for="r_flagged">标记为可疑</label>
-                    </div>
-                    <button type="submit" class="btn btn-primary w-100" id="reviewBtn">保存审核</button>
-                </form>
-                <div class="d-flex flex-wrap gap-1 mt-2">
-                    <span class="badge bg-secondary" style="cursor:pointer" onclick="addTag('高价值')">高价值</span>
-                    <span class="badge bg-secondary" style="cursor:pointer" onclick="addTag('需核实')">需核实</span>
-                    <span class="badge bg-secondary" style="cursor:pointer" onclick="addTag('重复')">重复</span>
-                    <span class="badge bg-secondary" style="cursor:pointer" onclick="addTag('虚假信息')">虚假信息</span>
-                </div>
-            </div>
-        </div>
-
-        <div class="card">
-            <div class="card-header fw-bold">人工修正档案</div>
+        <div class="card mb-3">
+            <div class="card-header fw-bold">档案修正</div>
             <div class="card-body">
                 <form id="profileForm" onsubmit="submitProfile(event)">
                     <div class="row g-2">
@@ -196,26 +157,32 @@
 
 {% block extra_js %}
 <script>
-async function submitReview(e) {
-    e.preventDefault();
-    const btn = document.getElementById('reviewBtn');
-    showLoading(btn);
-    const form = e.target;
-    const data = new FormData(form);
-    data.append('is_flagged', document.getElementById('r_flagged').checked ? 'true' : 'false');
-
-    const res = await fetch('/api/messages/{{ msg.id }}/review', {
-        method: 'POST',
-        body: data
-    });
-
-    hideLoading(btn, '保存审核');
-    if (res.ok) {
-        showToast('审核已保存', 'success');
-        setTimeout(() => location.reload(), 500);
-    } else {
-        showToast('保存失败', 'danger');
+async function toggleDetailLike() {
+    {% if profile %}
+    try {
+        const resp = await fetch('/api/profile/{{ profile.id }}/like', { method: 'POST' });
+        const data = await resp.json();
+        if (data.ok) {
+            location.reload();
+        }
+    } catch (e) {
+        showToast('操作失败', 'danger');
     }
+    {% endif %}
+}
+
+async function toggleDetailBlock() {
+    {% if profile %}
+    try {
+        const resp = await fetch('/api/profile/{{ profile.id }}/block', { method: 'POST' });
+        const data = await resp.json();
+        if (data.ok) {
+            location.reload();
+        }
+    } catch (e) {
+        showToast('操作失败', 'danger');
+    }
+    {% endif %}
 }
 
 async function submitProfile(e) {
@@ -235,15 +202,6 @@ async function submitProfile(e) {
     } else {
         showToast('档案更新失败', 'danger');
     }
-}
-
-function addTag(tag) {
-    const tagInput = document.getElementById('r_tags');
-    const current = tagInput.value.split(',').map((x) => x.trim()).filter((x) => x);
-    if (!current.includes(tag)) {
-        current.push(tag);
-    }
-    tagInput.value = current.join(', ');
 }
 </script>
 {% endblock %}

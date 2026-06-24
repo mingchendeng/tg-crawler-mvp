@@ -38,6 +38,19 @@
         }
         .sidebar .nav-item.active { border-right: 3px solid var(--accent); }
         .sidebar .nav-item i { font-size: 1.1rem; width: 20px; text-align: center; }
+        .sidebar .sub-item {
+            display: flex; align-items: center; gap: 8px;
+            padding: 6px 16px 6px 38px; color: rgba(255,255,255,.6); text-decoration: none;
+            transition: all .15s; font-size: .8rem; white-space: nowrap;
+        }
+        .sidebar .sub-item:hover, .sidebar .sub-item.active {
+            background: rgba(255,255,255,.08); color: #fff;
+        }
+        .sidebar .sub-item .badge {
+            font-size: .65rem; background: rgba(255,255,255,.12); color: rgba(255,255,255,.7);
+            padding: 1px 6px; border-radius: 10px; font-weight: 500;
+        }
+        .sidebar .sub-item .bi { font-size: .8rem; width: 16px; }
         .sidebar .user-info {
             margin-top: auto; padding: 14px 16px; border-top: 1px solid rgba(255,255,255,.08);
             color: rgba(255,255,255,.8); font-size: .82rem;
@@ -111,9 +124,17 @@
         <span>TG Crawler</span>
     </div>
 
-    <a href="/" class="nav-item {% if request.url.path == '/' %}active{% endif %}">
+    <a href="/" class="nav-item" id="msgNavBtn" onclick="toggleProvinceMenu()">
         <i class="bi bi-chat-dots"></i><span>消息</span>
+        <i class="bi bi-chevron-down ms-auto" id="msgChevron" style="font-size:.7rem;transition:transform .2s;"></i>
     </a>
+    <div id="provinceMenu" style="overflow:hidden;max-height:0;transition:max-height .3s ease;">
+        <div id="provinceList" style="padding:0 0 4px 0;"></div>
+        <div style="border-top:1px solid rgba(255,255,255,.06);margin:4px 12px;"></div>
+        <a href="/?liked=1" class="sub-item" id="navLiked"><i class="bi bi-heart"></i> 喜欢 <span id="likedCount" class="ms-auto badge"></span></a>
+        <a href="/?blocked=1" class="sub-item" id="navBlocked"><i class="bi bi-hand-thumbs-down"></i> 拉黑 <span id="blockedCount" class="ms-auto badge"></span></a>
+    </div>
+
     <a href="/persons" class="nav-item {% if request.url.path == '/persons' %}active{% endif %}">
         <i class="bi bi-people"></i><span>人物检索</span>
     </a>
@@ -253,6 +274,102 @@ document.addEventListener('keydown', function(e) {
     else if (e.key === 'ArrowRight') { nextMedia(); e.preventDefault(); }
     else if (e.key === 'Escape') { if (_mediaModalInstance) _mediaModalInstance.hide(); }
 });
+
+/* Province sidebar menu */
+function toggleProvinceMenu() {
+    const menu = document.getElementById('provinceMenu');
+    const ch = document.getElementById('msgChevron');
+    const open = menu.style.maxHeight !== '0px' && menu.style.maxHeight !== '';
+    menu.style.maxHeight = open ? '0px' : '2000px';
+    ch.style.transform = open ? '' : 'rotate(180deg)';
+    if (!open) loadProvinceSidebar();
+}
+
+const PROVINCE_STICKY = ['广东','浙江','江苏','四川','山东','河南','上海','湖南','湖北'];
+
+async function loadProvinceSidebar() {
+    const container = document.getElementById('provinceList');
+    if (container.dataset.loaded) return;
+    container.dataset.loaded = '1';
+    try {
+        const [provResp, statsResp] = await Promise.all([
+            fetch('/api/provinces'),
+            fetch('/api/profile/stats'),
+        ]);
+        const provData = await provResp.json();
+        const statsData = await statsResp.json();
+        if (!provData.ok) { container.innerHTML = '<div class="sub-item" style="padding-left:38px;color:rgba(255,255,255,.4);font-size:.75rem;">加载失败</div>'; return; }
+
+        const urlParams = new URLSearchParams(window.location.search);
+        const curProv = urlParams.get('province') || '';
+
+        let html = '<a href="/" class="sub-item' + (window.location.pathname === '/' && !curProv && !urlParams.get('liked') && !urlParams.get('blocked') ? ' active' : '') + '"><i class="bi bi-globe"></i> 全部</a>';
+
+        const items = provData.provinces || [];
+        const sticky = [];
+        const rest = [];
+        for (const item of items) {
+            const idx = PROVINCE_STICKY.indexOf(item.name);
+            if (idx >= 0) {
+                sticky[idx] = item;
+            } else {
+                rest.push(item);
+            }
+        }
+
+        for (const item of sticky) {
+            if (!item) continue;
+            const active = curProv === item.name ? ' active' : '';
+            html += '<a href="/?province=' + encodeURIComponent(item.name) + '" class="sub-item' + active + '">' + item.name + ' <span class="badge">' + item.count + '</span></a>';
+        }
+
+        if (rest.length > 0) {
+            html += '<div id="moreProvince" style="max-height:0;overflow:hidden;transition:max-height .3s;">';
+            for (const item of rest) {
+                const active = curProv === item.name ? ' active' : '';
+                html += '<a href="/?province=' + encodeURIComponent(item.name) + '" class="sub-item' + active + '">' + item.name + ' <span class="badge">' + item.count + '</span></a>';
+            }
+            html += '</div>';
+            html += '<a href="#" class="sub-item" onclick="toggleMoreProvince();return false;" style="font-size:.75rem;color:rgba(255,255,255,.4);"><i class="bi bi-three-dots"></i> 更多 <span class="badge">' + rest.length + '</span></a>';
+        }
+
+        container.innerHTML = html;
+
+        if (statsData.ok) {
+            const lc = document.getElementById('likedCount');
+            const bc = document.getElementById('blockedCount');
+            if (lc) lc.textContent = statsData.liked;
+            if (bc) bc.textContent = statsData.blocked;
+        }
+    } catch (e) {
+        container.innerHTML = '<div class="sub-item" style="padding-left:38px;color:rgba(255,255,255,.4);font-size:.75rem;">加载失败</div>';
+    }
+}
+
+function toggleMoreProvince() {
+    const el = document.getElementById('moreProvince');
+    el.style.maxHeight = el.style.maxHeight === '0px' || !el.style.maxHeight ? '2000px' : '0px';
+}
+
+/* Auto-open province menu if a province filter is active */
+(function() {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('province') || params.get('liked') || params.get('blocked')) {
+        const menu = document.getElementById('provinceMenu');
+        const ch = document.getElementById('msgChevron');
+        menu.style.maxHeight = '2000px';
+        ch.style.transform = 'rotate(180deg)';
+        if (params.get('liked')) {
+            const el = document.getElementById('navLiked');
+            if (el) el.classList.add('active');
+        }
+        if (params.get('blocked')) {
+            const el = document.getElementById('navBlocked');
+            if (el) el.classList.add('active');
+        }
+        loadProvinceSidebar();
+    }
+})();
 </script>
 {% block extra_js %}{% endblock %}
 </body>

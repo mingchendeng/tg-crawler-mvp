@@ -703,7 +703,16 @@ class IncrementalCrawler:
             'errors_count': errors_count,
         }
 
+    def _cleanup_media_paths(self, paths):
+        for p in paths:
+            try:
+                if p and os.path.exists(p):
+                    os.remove(p)
+            except Exception:
+                pass
+
     async def _handle_media(self, message, message_db_id: int, channel_name: str):
+        downloaded_paths = []
         try:
             base_path = self.tmp_dir / f"{message.id}"
             paths = await message.download_media(file=str(base_path))
@@ -711,6 +720,7 @@ class IncrementalCrawler:
                 return
             if not isinstance(paths, list):
                 paths = [paths]
+            downloaded_paths = paths
 
             for idx, local_path in enumerate(paths):
                 if not local_path or not os.path.exists(local_path):
@@ -741,10 +751,10 @@ class IncrementalCrawler:
                     local_thumb_url=meta.get('local_thumb_url'),
                     owner_user_id=self.owner_user_id,
                 )
-
-                os.remove(local_path)
         except Exception as e:
             logger.error(f"Media error msg={message.id}: {e}")
+        finally:
+            self._cleanup_media_paths(downloaded_paths)
 
     def _detect_media_type(self, message, local_path: str) -> str:
         if isinstance(message.media, MessageMediaPhoto):
