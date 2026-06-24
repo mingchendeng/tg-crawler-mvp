@@ -20,6 +20,9 @@ from urllib.parse import urlencode
 from io import BytesIO
 from base64 import b64encode
 
+import boto3
+from botocore.config import Config as BotoConfig
+
 import psutil
 import qrcode
 from telethon import TelegramClient
@@ -124,6 +127,27 @@ TG_PROXY_PORT = int(os.getenv('TG_PROXY_PORT', '7994') or 7994)
 
 LOGGER = logging.getLogger(__name__)
 SYSTEM_ACTION_LOCK = threading.Lock()
+
+# ---------- S3 client (shared for media proxy) ----------
+
+S3_ACCESS_KEY = os.getenv('S3_ACCESS_KEY', '')
+S3_SECRET_KEY = os.getenv('S3_SECRET_KEY', '')
+S3_BUCKET = os.getenv('S3_BUCKET', 'tg-crawler-media-ffe95227')
+S3_REGION = os.getenv('S3_REGION', 'ap-east-1')
+S3_ENDPOINT = os.getenv('S3_ENDPOINT', '').strip() or None
+
+if S3_ACCESS_KEY and S3_SECRET_KEY:
+    _s3_cfg = BotoConfig(signature_version='s3v4')
+    _s3_client = boto3.client(
+        's3',
+        aws_access_key_id=S3_ACCESS_KEY,
+        aws_secret_access_key=S3_SECRET_KEY,
+        endpoint_url=S3_ENDPOINT,
+        region_name=S3_REGION,
+        config=_s3_cfg,
+    )
+else:
+    _s3_client = None
 
 
 def _parse_int(value: Optional[str]) -> Optional[int]:
@@ -1211,8 +1235,8 @@ async def persons_page(
             LEFT JOIN LATERAL (
                 SELECT
                     mf.media_type,
-                    COALESCE(mf.local_thumb_url, mf.thumb_url, mf.local_s3_url, mf.s3_url) AS preview_url,
-                    COALESCE(mf.local_s3_url, mf.s3_url) AS preview_s3_url
+                    '/s3/' || mf.id || '?thumb=1' AS preview_url,
+                    '/s3/' || mf.id AS preview_s3_url
                 FROM media_files mf
                 WHERE mf.message_id = m.id
                 ORDER BY
@@ -1380,8 +1404,8 @@ async def person_group_page(
                 mf.telegram_file_id, mf.file_unique_id, mf.media_type,
                 mf.mime_type, mf.file_size, mf.width, mf.height,
                 mf.s3_bucket, mf.s3_key,
-                COALESCE(mf.local_s3_url, mf.s3_url) AS s3_url,
-                COALESCE(mf.local_thumb_url, mf.thumb_url) AS thumb_url,
+                '/s3/' || mf.id AS s3_url,
+                '/s3/' || mf.id || '?thumb=1' AS thumb_url,
                 mf.thumb_key, mf.local_s3_url, mf.local_thumb_url,
                 mf.local_path, mf.ocr_text, mf.is_nsfw,
                 mf.face_detected, mf.processing_status, mf.created_at,
@@ -2655,8 +2679,8 @@ async def api_message_media(msg_id: int, request: Request, db=Depends(get_db)):
         db,
         """
         SELECT id, media_type,
-               COALESCE(local_s3_url, s3_url) AS s3_url,
-               COALESCE(local_thumb_url, thumb_url) AS thumb_url,
+               '/s3/' || id AS s3_url,
+               '/s3/' || id || '?thumb=1' AS thumb_url,
                file_size, width, height, mime_type
         FROM media_files
         WHERE message_id = %s
@@ -2665,6 +2689,25 @@ async def api_message_media(msg_id: int, request: Request, db=Depends(get_db)):
         (msg_id,),
     ).fetchall()
     return {'ok': True, 'media': [dict(r) for r in rows]}
+
+
+@app.get('/s3/{media_id}')
+async def s3_proxy(media_id: int, request: Request, db=Depends(get_db)):
+    user = get_current_user(request, db)
+    thumb = request.query_params.get('thumb', '0') == '1'
+    row = db_execute(db, 'SELECT s3_bucket, s3_key, thumb_key FROM media_files WHERE id = %s', (media_id,)).fetchone()
+    if not row:
+        raise HTTPException(404, '媒体文件不存在')
+    key = row['thumb_key'] if (thumb and row['thumb_key']) else row['s3_key']
+    bucket = row['s3_bucket'] or S3_BUCKET
+    if _s3_client is None:
+        raise HTTPException(500, 'S3 未配置')
+    url = _s3_client.generate_presigned_url(
+        'get_object',
+        Params={'Bucket': bucket, 'Key': key},
+        ExpiresIn=3600,
+    )
+    return RedirectResponse(url)
 
 
 # ==================== Persons ====================

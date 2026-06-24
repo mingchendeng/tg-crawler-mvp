@@ -11,3 +11,4 @@ python-socks[asyncio]>=2.5.1
 qrcode>=8.0
 pillow>=10.0.0
 psutil>=5.9.0
+boto3>=1.34.0
