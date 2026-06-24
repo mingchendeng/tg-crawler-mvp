@@ -29,6 +29,16 @@ jobs:
           key: ${{ secrets.EC2_SSH_KEY }}
           script: |
             set -euxo pipefail
+            # Create .env on remote from GitHub Secrets (avoid keeping secrets in repo)
+            cat > /tmp/.env.deploy <<'ENVEOF'
+DATABASE_URL=${{ secrets.DATABASE_URL }}
+S3_ACCESS_KEY=${{ secrets.S3_ACCESS_KEY }}
+S3_SECRET_KEY=${{ secrets.S3_SECRET_KEY }}
+ADMIN_SECRET=${{ secrets.ADMIN_SECRET }}
+ENVEOF
+            sudo mv /tmp/.env.deploy /opt/tg-crawler/.env
+            sudo chown ubuntu:ubuntu /opt/tg-crawler/.env
+            sudo chmod 600 /opt/tg-crawler/.env
             # Prefer top-level deploy.sh, but fall back to scripts/deploy.sh (rsync may place it there).
             if [ -f /opt/tg-crawler/deploy.sh ]; then
               DEPLOY_PATH=/opt/tg-crawler/deploy.sh
