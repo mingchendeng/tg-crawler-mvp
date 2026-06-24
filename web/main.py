@@ -249,6 +249,17 @@ COUNTRY_NAMES = {'日本', '英国', '美国', '法国', '德国', '意大利', 
     '葡萄牙', '澳大利亚', '加拿大', '新加坡', '马来西亚', '泰国', '韩国',
     '朝鲜', '印度', '越南', '吉隆坡', '迪拜'}
 
+STANDARD_PROVINCES = {
+    '北京', '天津', '上海', '重庆',
+    '河北', '山西', '辽宁', '吉林', '黑龙江',
+    '江苏', '浙江', '安徽', '福建', '江西', '山东',
+    '河南', '湖北', '湖南', '广东', '海南',
+    '四川', '贵州', '云南', '陕西', '甘肃', '青海',
+    '台湾', '内蒙古', '广西', '西藏', '宁夏', '新疆',
+    '香港', '澳门',
+    '跨省', '海外',
+}
+
 
 def _build_province_reverse_map() -> Dict[str, List[str]]:
     rev: Dict[str, List[str]] = {}
@@ -290,7 +301,11 @@ def _normalize_province(raw: Optional[str]) -> Optional[str]:
     if v in {'可', '可以', '否', '🉑'}:
         return None
 
-    # Exact map
+    # Already a standard province name -> pass through
+    if v in STANDARD_PROVINCES:
+        return v
+
+    # Exact map (typos, full-form names -> short form)
     if v in PROVINCE_MAP:
         return PROVINCE_MAP[v]
 
@@ -315,6 +330,8 @@ def _normalize_province(raw: Optional[str]) -> Optional[str]:
     # Extract suffix (e.g. "湖北YH1023" -> "湖北")
     no_suffix = re.sub(r'[（(].*?[）)]$', '', v).strip()
     no_suffix = re.sub(r'[A-Za-z0-9]+$', '', no_suffix).strip()
+    if no_suffix and no_suffix in STANDARD_PROVINCES:
+        return no_suffix
     if no_suffix and no_suffix in PROVINCE_MAP:
         return PROVINCE_MAP[no_suffix]
     if no_suffix and no_suffix in CITY_MAP:
