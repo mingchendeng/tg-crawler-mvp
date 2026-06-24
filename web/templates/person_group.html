@@ -20,9 +20,27 @@
             <div class="col-md-3"><strong>职业:</strong> {{ summary.occupation or '-' }}</div>
             <div class="col-md-3"><strong>介绍费:</strong> {{ summary.introduction_fee or '-' }}</div>
             <div class="col-md-3"><strong>生活费:</strong> {{ summary.monthly_allowance or '-' }}</div>
+            <div class="col-md-3"><strong>人物Key:</strong> <code>{{ person_key }}</code></div>
         </div>
     </div>
 </div>
+
+{% if is_admin %}
+<div class="card mb-3 border-danger">
+    <div class="card-header fw-bold text-danger">合并工具</div>
+    <div class="card-body">
+        <form id="mergeForm" class="row g-2 align-items-end">
+            <div class="col-md-6">
+                <label class="form-label small fw-bold">将此组合并到目标（粘贴目标人物 key）</label>
+                <input type="text" id="targetPersonKey" class="form-control form-control-sm" placeholder="person:123 或 /persons/group?person_key=person:123">
+            </div>
+            <div class="col-md-3">
+                <button type="submit" class="btn btn-danger btn-sm" onclick="return confirmMerge()">合并</button>
+            </div>
+        </form>
+    </div>
+</div>
+{% endif %}
 
 <div class="card mb-3">
     <div class="card-header fw-bold">全部媒体（跨消息汇总）</div>
@@ -90,4 +108,48 @@
         </table>
     </div>
 </div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+function confirmMerge() {
+    const targetRaw = document.getElementById('targetPersonKey').value.trim();
+    if (!targetRaw) {
+        showToast('请输入目标人物 key', 'warning');
+        return false;
+    }
+    const match = targetRaw.match(/person:(\d+)/);
+    if (!match) {
+        showToast('无法解析目标 key，请使用 person:ID 格式', 'warning');
+        return false;
+    }
+    const targetPersonId = parseInt(match[1]);
+    if (!confirm('确认将当前组合并到 person:' + targetPersonId + '？此操作不可撤销！')) {
+        return false;
+    }
+
+    const sourceMatch = '{{ person_key }}'.match(/person:(\d+)/);
+    if (!sourceMatch) {
+        showToast('当前分组不是 person: 类型，无法合并', 'warning');
+        return false;
+    }
+    const sourcePersonId = parseInt(sourceMatch[1]);
+    const formData = new FormData();
+    formData.append('source_person_id', sourcePersonId);
+    formData.append('target_person_id', targetPersonId);
+
+    fetch('/api/persons/merge', { method: 'POST', body: formData })
+        .then(r => r.json())
+        .then(data => {
+            if (data.ok) {
+                showToast('合并成功，移动了 ' + data.moved_profiles + ' 条记录', 'success');
+                setTimeout(() => location.reload(), 700);
+            } else {
+                showToast('合并失败: ' + (data.error || '未知错误'), 'danger');
+            }
+        })
+        .catch(e => showToast('请求失败: ' + e.message, 'danger'));
+    return false;
+}
+</script>
 {% endblock %}

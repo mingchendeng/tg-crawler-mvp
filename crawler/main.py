@@ -311,6 +311,7 @@ class IncrementalCrawler:
         for row in rows:
             extracted = self._parse_extracted_value(row[1] if len(row) > 1 else None)
             if self.db.upsert_profile_from_extracted(row[0], extracted, owner_user_id=self.owner_user_id):
+                self._link_profile_to_person(channel_id, row[0], extracted)
                 count += 1
         return count
 
@@ -472,8 +473,45 @@ class IncrementalCrawler:
                     )
                     self.db.commit()
                 if self.db.upsert_profile_from_extracted(msg_id, merged, owner_user_id=self.owner_user_id):
+                    self._link_profile_to_person(channel_id, msg_id, merged)
                     repaired += 1
         return repaired
+
+    def _link_profile_to_person(self, channel_id: int, message_id: int, extracted: dict):
+        row = self.db.fetchone("SELECT id FROM profiles WHERE message_id = %s", (message_id,))
+        if not row:
+            return
+        code = extracted.get('code')
+        person_id = self.db.ensure_person(channel_id, code, extracted, owner_user_id=self.owner_user_id)
+        self.db.link_profile_to_person(row[0], person_id)
+
+    def _recover_missing_local_mirror(self, channel_id: int, limit: int = 200):
+        if not self.uploader.local_client:
+            return 0
+        rows = self.db.fetchall(
+            """SELECT mf.id, mf.s3_key, mf.thumb_key
+               FROM media_files mf
+               JOIN messages m ON m.id = mf.message_id
+               WHERE m.channel_id = %s
+                 AND mf.local_s3_url IS NULL
+                 AND mf.s3_key IS NOT NULL
+               LIMIT %s""",
+            (channel_id, limit),
+        )
+        if not rows:
+            return 0
+
+        count = 0
+        for r in rows:
+            local_s3_url, local_thumb_url = self.uploader.retry_local_mirror(r['s3_key'], r['thumb_key'])
+            if local_s3_url:
+                self.db.execute(
+                    "UPDATE media_files SET local_s3_url = %s, local_thumb_url = %s WHERE id = %s",
+                    (local_s3_url, local_thumb_url, r['id']),
+                )
+                self.db.commit()
+                count += 1
+        return count
 
     async def _flush_batch(
         self,
@@ -505,7 +543,9 @@ class IncrementalCrawler:
                 continue
 
             message_db_id = row[0]
-            self.db.upsert_profile_from_extracted(message_db_id, item.get('extracted_obj') or {}, owner_user_id=self.owner_user_id)
+            extracted = item.get('extracted_obj') or {}
+            if self.db.upsert_profile_from_extracted(message_db_id, extracted, owner_user_id=self.owner_user_id):
+                self._link_profile_to_person(channel_id, message_db_id, extracted)
 
             if item['has_media']:
                 source_message = media_messages.get(item['telegram_message_id'])
@@ -677,7 +717,7 @@ class IncrementalCrawler:
                     continue
 
                 media_type = self._detect_media_type(message, str(local_path))
-                meta = self.uploader.upload_media(str(local_path), channel_name, message.id, idx)
+                meta = self.uploader.upload_media(str(local_path), channel_name, message.id, idx, msg_date=message.date)
 
                 ocr_text = None
                 if media_type == 'photo':
@@ -697,6 +737,8 @@ class IncrementalCrawler:
                     meta.get('thumb_url'),
                     ocr_text,
                     os.path.getsize(local_path),
+                    local_s3_url=meta.get('local_s3_url'),
+                    local_thumb_url=meta.get('local_thumb_url'),
                     owner_user_id=self.owner_user_id,
                 )
 

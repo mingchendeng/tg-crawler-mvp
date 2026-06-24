@@ -1,0 +1,97 @@
++ '[' -f .env.stored ']'
++ '[' '!' -f .env ']'
++ '[' '!' -d /opt/tg-crawler/venv ']'
++ '[' '!' -x /opt/tg-crawler/venv/bin/python3 ']'
++ '[' '!' -f /opt/tg-crawler/venv/bin/pip ']'
++ echo 'Found existing venv; ensuring pip is available'
+Found existing venv; ensuring pip is available
++ /opt/tg-crawler/venv/bin/python3 -m pip --version
++ /opt/tg-crawler/venv/bin/python3 -m pip install --upgrade pip setuptools wheel
+Requirement already satisfied: pip in ./venv/lib/python3.12/site-packages (26.1.2)
+Requirement already satisfied: setuptools in ./venv/lib/python3.12/site-packages (82.0.1)
+Requirement already satisfied: wheel in ./venv/lib/python3.12/site-packages (0.47.0)
+Requirement already satisfied: packaging>=24.0 in ./venv/lib/python3.12/site-packages (from wheel) (26.2)
++ PIP_BIN=/opt/tg-crawler/venv/bin/pip
++ echo 'Installing requirements via /opt/tg-crawler/venv/bin/pip'
+Installing requirements via /opt/tg-crawler/venv/bin/pip
++ '[' -f web/requirements.txt ']'
++ /opt/tg-crawler/venv/bin/pip install -r web/requirements.txt
+Requirement already satisfied: fastapi>=0.109.0 in ./venv/lib/python3.12/site-packages (from -r web/requirements.txt (line 1)) (0.138.0)
+Requirement already satisfied: uvicorn>=0.27.0 in ./venv/lib/python3.12/site-packages (from uvicorn[standard]>=0.27.0->-r web/requirements.txt (line 2)) (0.49.0)
+Requirement already satisfied: jinja2>=3.1.0 in ./venv/lib/python3.12/site-packages (from -r web/requirements.txt (line 3)) (3.1.6)
+Requirement already satisfied: python-multipart>=0.0.6 in ./venv/lib/python3.12/site-packages (from -r web/requirements.txt (line 4)) (0.0.32)
+Requirement already satisfied: psycopg2-binary>=2.9.9 in ./venv/lib/python3.12/site-packages (from -r web/requirements.txt (line 5)) (2.9.12)
+Requirement already satisfied: bcrypt>=4.1.0 in ./venv/lib/python3.12/site-packages (from -r web/requirements.txt (line 6)) (5.0.0)
+Requirement already satisfied: PyJWT>=2.8.0 in ./venv/lib/python3.12/site-packages (from -r web/requirements.txt (line 7)) (2.13.0)
+Requirement already satisfied: telethon>=1.35.0 in ./venv/lib/python3.12/site-packages (from -r web/requirements.txt (line 8)) (1.44.0)
+Requirement already satisfied: pysocks>=1.7.1 in ./venv/lib/python3.12/site-packages (from -r web/requirements.txt (line 9)) (1.7.1)
+Requirement already satisfied: python-socks>=2.5.1 in ./venv/lib/python3.12/site-packages (from python-socks[asyncio]>=2.5.1->-r web/requirements.txt (line 10)) (2.8.2)
+Requirement already satisfied: qrcode>=8.0 in ./venv/lib/python3.12/site-packages (from -r web/requirements.txt (line 11)) (8.2)
+Requirement already satisfied: pillow>=10.0.0 in ./venv/lib/python3.12/site-packages (from -r web/requirements.txt (line 12)) (12.2.0)
+Requirement already satisfied: starlette>=0.46.0 in ./venv/lib/python3.12/site-packages (from fastapi>=0.109.0->-r web/requirements.txt (line 1)) (1.3.1)
+Requirement already satisfied: pydantic>=2.9.0 in ./venv/lib/python3.12/site-packages (from fastapi>=0.109.0->-r web/requirements.txt (line 1)) (2.13.4)
+Requirement already satisfied: typing-extensions>=4.8.0 in ./venv/lib/python3.12/site-packages (from fastapi>=0.109.0->-r web/requirements.txt (line 1)) (4.15.0)
+Requirement already satisfied: typing-inspection>=0.4.2 in ./venv/lib/python3.12/site-packages (from fastapi>=0.109.0->-r web/requirements.txt (line 1)) (0.4.2)
+Requirement already satisfied: annotated-doc>=0.0.2 in ./venv/lib/python3.12/site-packages (from fastapi>=0.109.0->-r web/requirements.txt (line 1)) (0.0.4)
+Requirement already satisfied: click>=7.0 in ./venv/lib/python3.12/site-packages (from uvicorn>=0.27.0->uvicorn[standard]>=0.27.0->-r web/requirements.txt (line 2)) (8.4.1)
+Requirement already satisfied: h11>=0.8 in ./venv/lib/python3.12/site-packages (from uvicorn>=0.27.0->uvicorn[standard]>=0.27.0->-r web/requirements.txt (line 2)) (0.16.0)
+Requirement already satisfied: MarkupSafe>=2.0 in ./venv/lib/python3.12/site-packages (from jinja2>=3.1.0->-r web/requirements.txt (line 3)) (3.0.3)
+Requirement already satisfied: pyaes in ./venv/lib/python3.12/site-packages (from telethon>=1.35.0->-r web/requirements.txt (line 8)) (1.6.1)
+Requirement already satisfied: rsa in ./venv/lib/python3.12/site-packages (from telethon>=1.35.0->-r web/requirements.txt (line 8)) (4.9.1)
+Requirement already satisfied: annotated-types>=0.6.0 in ./venv/lib/python3.12/site-packages (from pydantic>=2.9.0->fastapi>=0.109.0->-r web/requirements.txt (line 1)) (0.7.0)
+Requirement already satisfied: pydantic-core==2.46.4 in ./venv/lib/python3.12/site-packages (from pydantic>=2.9.0->fastapi>=0.109.0->-r web/requirements.txt (line 1)) (2.46.4)
+Requirement already satisfied: anyio<5,>=3.6.2 in ./venv/lib/python3.12/site-packages (from starlette>=0.46.0->fastapi>=0.109.0->-r web/requirements.txt (line 1)) (4.14.0)
+Requirement already satisfied: idna>=2.8 in ./venv/lib/python3.12/site-packages (from anyio<5,>=3.6.2->starlette>=0.46.0->fastapi>=0.109.0->-r web/requirements.txt (line 1)) (3.18)
+Requirement already satisfied: httptools>=0.8.0 in ./venv/lib/python3.12/site-packages (from uvicorn[standard]>=0.27.0->-r web/requirements.txt (line 2)) (0.8.0)
+Requirement already satisfied: python-dotenv>=0.13 in ./venv/lib/python3.12/site-packages (from uvicorn[standard]>=0.27.0->-r web/requirements.txt (line 2)) (1.2.2)
+Requirement already satisfied: pyyaml>=5.1 in ./venv/lib/python3.12/site-packages (from uvicorn[standard]>=0.27.0->-r web/requirements.txt (line 2)) (6.0.3)
+Requirement already satisfied: uvloop>=0.15.1 in ./venv/lib/python3.12/site-packages (from uvicorn[standard]>=0.27.0->-r web/requirements.txt (line 2)) (0.22.1)
+Requirement already satisfied: watchfiles>=0.20 in ./venv/lib/python3.12/site-packages (from uvicorn[standard]>=0.27.0->-r web/requirements.txt (line 2)) (1.2.0)
+Requirement already satisfied: websockets>=10.4 in ./venv/lib/python3.12/site-packages (from uvicorn[standard]>=0.27.0->-r web/requirements.txt (line 2)) (16.0)
+Requirement already satisfied: pyasn1>=0.1.3 in ./venv/lib/python3.12/site-packages (from rsa->telethon>=1.35.0->-r web/requirements.txt (line 8)) (0.6.3)
++ '[' -f crawler/requirements.txt ']'
++ /opt/tg-crawler/venv/bin/pip install -r crawler/requirements.txt
+Requirement already satisfied: telethon>=1.35.0 in ./venv/lib/python3.12/site-packages (from -r crawler/requirements.txt (line 1)) (1.44.0)
+Requirement already satisfied: psycopg2-binary>=2.9.9 in ./venv/lib/python3.12/site-packages (from -r crawler/requirements.txt (line 2)) (2.9.12)
+Requirement already satisfied: boto3>=1.34.0 in ./venv/lib/python3.12/site-packages (from -r crawler/requirements.txt (line 3)) (1.43.36)
+Requirement already satisfied: pillow>=10.0.0 in ./venv/lib/python3.12/site-packages (from -r crawler/requirements.txt (line 4)) (12.2.0)
+Requirement already satisfied: pytesseract>=0.3.10 in ./venv/lib/python3.12/site-packages (from -r crawler/requirements.txt (line 5)) (0.3.13)
+Requirement already satisfied: python-dotenv>=1.0.0 in ./venv/lib/python3.12/site-packages (from -r crawler/requirements.txt (line 6)) (1.2.2)
+Requirement already satisfied: httpx>=0.27.0 in ./venv/lib/python3.12/site-packages (from -r crawler/requirements.txt (line 7)) (0.28.1)
+Requirement already satisfied: pysocks>=1.7.1 in ./venv/lib/python3.12/site-packages (from -r crawler/requirements.txt (line 8)) (1.7.1)
+Requirement already satisfied: python-socks>=2.5.1 in ./venv/lib/python3.12/site-packages (from python-socks[asyncio]>=2.5.1->-r crawler/requirements.txt (line 9)) (2.8.2)
+Requirement already satisfied: pyaes in ./venv/lib/python3.12/site-packages (from telethon>=1.35.0->-r crawler/requirements.txt (line 1)) (1.6.1)
+Requirement already satisfied: rsa in ./venv/lib/python3.12/site-packages (from telethon>=1.35.0->-r crawler/requirements.txt (line 1)) (4.9.1)
+Requirement already satisfied: botocore<1.44.0,>=1.43.36 in ./venv/lib/python3.12/site-packages (from boto3>=1.34.0->-r crawler/requirements.txt (line 3)) (1.43.36)
+Requirement already satisfied: jmespath<2.0.0,>=0.7.1 in ./venv/lib/python3.12/site-packages (from boto3>=1.34.0->-r crawler/requirements.txt (line 3)) (1.1.0)
+Requirement already satisfied: s3transfer<0.20.0,>=0.19.0 in ./venv/lib/python3.12/site-packages (from boto3>=1.34.0->-r crawler/requirements.txt (line 3)) (0.19.0)
+Requirement already satisfied: python-dateutil<3.0.0,>=2.1 in ./venv/lib/python3.12/site-packages (from botocore<1.44.0,>=1.43.36->boto3>=1.34.0->-r crawler/requirements.txt (line 3)) (2.9.0.post0)
+Requirement already satisfied: urllib3!=2.2.0,<3,>=1.25.4 in ./venv/lib/python3.12/site-packages (from botocore<1.44.0,>=1.43.36->boto3>=1.34.0->-r crawler/requirements.txt (line 3)) (2.7.0)
+Requirement already satisfied: six>=1.5 in ./venv/lib/python3.12/site-packages (from python-dateutil<3.0.0,>=2.1->botocore<1.44.0,>=1.43.36->boto3>=1.34.0->-r crawler/requirements.txt (line 3)) (1.17.0)
+Requirement already satisfied: packaging>=21.3 in ./venv/lib/python3.12/site-packages (from pytesseract>=0.3.10->-r crawler/requirements.txt (line 5)) (26.2)
+Requirement already satisfied: anyio in ./venv/lib/python3.12/site-packages (from httpx>=0.27.0->-r crawler/requirements.txt (line 7)) (4.14.0)
+Requirement already satisfied: certifi in ./venv/lib/python3.12/site-packages (from httpx>=0.27.0->-r crawler/requirements.txt (line 7)) (2026.6.17)
+Requirement already satisfied: httpcore==1.* in ./venv/lib/python3.12/site-packages (from httpx>=0.27.0->-r crawler/requirements.txt (line 7)) (1.0.9)
+Requirement already satisfied: idna in ./venv/lib/python3.12/site-packages (from httpx>=0.27.0->-r crawler/requirements.txt (line 7)) (3.18)
+Requirement already satisfied: h11>=0.16 in ./venv/lib/python3.12/site-packages (from httpcore==1.*->httpx>=0.27.0->-r crawler/requirements.txt (line 7)) (0.16.0)
+Requirement already satisfied: typing_extensions>=4.5 in ./venv/lib/python3.12/site-packages (from anyio->httpx>=0.27.0->-r crawler/requirements.txt (line 7)) (4.15.0)
+Requirement already satisfied: pyasn1>=0.1.3 in ./venv/lib/python3.12/site-packages (from rsa->telethon>=1.35.0->-r crawler/requirements.txt (line 1)) (0.6.3)
++ echo 'Restarting systemd service: tg-crawler-web.service'
+Restarting systemd service: tg-crawler-web.service
++ sudo systemctl daemon-reload
++ sudo systemctl restart tg-crawler-web.service
++ sudo systemctl status tg-crawler-web.service --no-pager
+● tg-crawler-web.service - TG Crawler Web
+     Loaded: loaded (/etc/systemd/system/tg-crawler-web.service; enabled; preset: enabled)
+     Active: active (running) since Wed 2026-06-24 06:09:35 UTC; 29ms ago
+   Main PID: 13939 (uvicorn)
+      Tasks: 1 (limit: 1075)
+     Memory: 3.9M (peak: 3.9M)
+        CPU: 20ms
+     CGroup: /system.slice/tg-crawler-web.service
+             └─13939 /opt/tg-crawler/venv/bin/python3 /opt/tg-crawler/.venv/bin/uvicorn main:app --host 0.0.0.0 --port 8080
+
+Jun 24 06:09:35 ip-172-31-23-15 systemd[1]: Started tg-crawler-web.service - TG Crawler Web.
+++ date -u
++ echo 'Deploy script finished at Wed Jun 24 06:09:35 UTC 2026'
+Deploy script finished at Wed Jun 24 06:09:35 UTC 2026

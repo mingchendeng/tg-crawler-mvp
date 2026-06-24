@@ -2623,14 +2623,14 @@ async def update_profile(
                 )
                 person_row = cur.fetchone()
                 if person_row:
-                    person_id = person_row[0]
+                    person_id = person_row['id']
                 else:
                     cur.execute(
                         """INSERT INTO persons (channel_id, normalized_code, display_nickname)
                            VALUES (%s, %s, %s) RETURNING id""",
                         (msg_row['channel_id'], code, payload.get('display_nickname')),
                     )
-                    person_id = cur.fetchone()[0]
+                    person_id = cur.fetchone()['id']
                 cur.execute("UPDATE profiles SET person_id = %s WHERE id = %s", (person_id, pn['id']))
                 db.commit()
     db_execute(
@@ -2734,10 +2734,11 @@ async def backfill_persons_api(request: Request, db=Depends(get_db)):
 
     count = 0
     for r in rows:
-        profile_id, internal_code = r[0], r[1]
-        channel_id = r[15]
-        nickname = r[3] or ''
-        contact_info_text = r[14]
+        profile_id = r['profile_id']
+        internal_code = r['internal_code']
+        channel_id = r['channel_id']
+        nickname = r['display_nickname'] or ''
+        contact_info_text = r['contact_info']
         contacts = None
         if contact_info_text:
             try:
@@ -2760,7 +2761,7 @@ async def backfill_persons_api(request: Request, db=Depends(get_db)):
             )
             person_row = cur.fetchone()
             if person_row:
-                person_id = person_row[0]
+                person_id = person_row['id']
                 cur.execute(
                     "UPDATE persons SET profile_count = profile_count + 1, last_seen_at = NOW() WHERE id = %s",
                     (person_id,),
@@ -2772,16 +2773,17 @@ async def backfill_persons_api(request: Request, db=Depends(get_db)):
                        introduction_fee, monthly_allowance)
                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                        RETURNING id""",
-                    (channel_id, normalized_code, r[3], r[4], r[5], r[6], r[7], r[8],
-                     r[9], r[10], r[11], r[12]),
+                    (channel_id, normalized_code, r['display_nickname'], r['province'],
+                     r['city'], r['age'], r['height'], r['weight'],
+                     r['cup_size'], r['occupation'], r['introduction_fee'], r['monthly_allowance']),
                 )
-                person_id = cur.fetchone()[0]
+                person_id = cur.fetchone()['id']
         else:
             cur.execute(
                 "INSERT INTO persons (channel_id, display_nickname) VALUES (%s, %s) RETURNING id",
                 (channel_id, nickname),
             )
-            person_id = cur.fetchone()[0]
+            person_id = cur.fetchone()['id']
 
         cur.execute("UPDATE profiles SET person_id = %s WHERE id = %s", (person_id, profile_id))
         count += 1

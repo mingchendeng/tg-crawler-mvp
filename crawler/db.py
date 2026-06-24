@@ -376,36 +376,56 @@ class Database:
                     Json(payload['contact_info']) if payload['contact_info'] else None,
                     row[0],
                 ),
-        )
-        self.execute(
-            sql,
-            (
-                message_id,
-                payload['display_nickname'],
-                payload['internal_code'],
-                payload['province'],
-                payload['city'],
-                owner_user_id,
-                payload['age'],
-                payload['height'],
-                payload['weight'],
-                payload['cup_size'],
-                payload['occupation'],
-                payload['is_virgin'],
-                payload['oral_available'],
-                payload['creampie_available'],
-                payload['condomless_available'],
-                payload['sm_available'],
-                payload['has_tattoo'],
-                payload['out_province_available'],
-                payload['overnight_available'],
-                payload['cohabitation_available'],
-                payload['monthly_allowance'],
-                payload['introduction_fee'],
-                payload['tags'],
-                Json(payload['contact_info']) if payload['contact_info'] else None,
-            ),
-        )
+            )
+        else:
+            sql = """
+                INSERT INTO profiles (
+                    message_id, display_nickname, internal_code,
+                    province, city, owner_user_id,
+                    age, height, weight, cup_size, occupation,
+                    is_virgin, oral_available, creampie_available,
+                    condomless_available, sm_available, has_tattoo,
+                    out_province_available, overnight_available,
+                    cohabitation_available, monthly_allowance,
+                    introduction_fee, tags, contact_info
+                ) VALUES (
+                    %s, %s, %s, %s, %s,
+                    %s,
+                    %s, %s, %s, %s, %s,
+                    %s, %s, %s, %s, %s,
+                    %s, %s, %s, %s, %s,
+                    %s, %s, %s
+                )
+            """
+            self.execute(
+                sql,
+                (
+                    message_id,
+                    payload['display_nickname'],
+                    payload['internal_code'],
+                    payload['province'],
+                    payload['city'],
+                    owner_user_id,
+                    payload['age'],
+                    payload['height'],
+                    payload['weight'],
+                    payload['cup_size'],
+                    payload['occupation'],
+                    payload['is_virgin'],
+                    payload['oral_available'],
+                    payload['creampie_available'],
+                    payload['condomless_available'],
+                    payload['sm_available'],
+                    payload['has_tattoo'],
+                    payload['out_province_available'],
+                    payload['overnight_available'],
+                    payload['cohabitation_available'],
+                    payload['monthly_allowance'],
+                    payload['introduction_fee'],
+                    payload['tags'],
+                    Json(payload['contact_info']) if payload['contact_info'] else None,
+                ),
+            )
         self.commit()
         return True
 
@@ -523,70 +543,3 @@ class Database:
             count += 1
 
         return count
-
-        sql = """
-            INSERT INTO profiles (
-                message_id,
-                display_nickname,
-                internal_code,
-                province,
-                city,
-                owner_user_id,
-                age,
-                height,
-                weight,
-                cup_size,
-                occupation,
-                is_virgin,
-                oral_available,
-                creampie_available,
-                condomless_available,
-                sm_available,
-                has_tattoo,
-                out_province_available,
-                overnight_available,
-                cohabitation_available,
-                monthly_allowance,
-                introduction_fee,
-                tags,
-                contact_info
-            ) VALUES (
-                %s, %s, %s, %s, %s,
-                %s,
-                %s, %s, %s, %s, %s,
-                %s, %s, %s, %s, %s,
-                %s, %s, %s, %s, %s,
-                %s, %s, %s
-            )
-        """
-        self.execute(
-            sql,
-            (
-                message_id,
-                payload['display_nickname'],
-                payload['internal_code'],
-                payload['province'],
-                payload['city'],
-                owner_user_id,
-                payload['age'],
-                payload['height'],
-                payload['weight'],
-                payload['cup_size'],
-                payload['occupation'],
-                payload['is_virgin'],
-                payload['oral_available'],
-                payload['creampie_available'],
-                payload['condomless_available'],
-                payload['sm_available'],
-                payload['has_tattoo'],
-                payload['out_province_available'],
-                payload['overnight_available'],
-                payload['cohabitation_available'],
-                payload['monthly_allowance'],
-                payload['introduction_fee'],
-                payload['tags'],
-                Json(payload['contact_info']) if payload['contact_info'] else None,
-            ),
-        )
-        self.commit()
-        return True

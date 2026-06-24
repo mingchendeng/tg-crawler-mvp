@@ -88,6 +88,35 @@ CREATE INDEX IF NOT EXISTS idx_profiles_owner ON profiles(owner_user_id);
 CREATE INDEX IF NOT EXISTS idx_profiles_age ON profiles(age);
 CREATE INDEX IF NOT EXISTS idx_profiles_fee ON profiles(introduction_fee);
 
+-- 人物表（按编号归并，一人一记录）
+CREATE TABLE IF NOT EXISTS persons (
+    id BIGSERIAL PRIMARY KEY,
+    owner_user_id BIGINT,
+    channel_id BIGINT REFERENCES channels(id) ON DELETE CASCADE,
+    normalized_code VARCHAR(50),
+    display_nickname VARCHAR(255),
+    province VARCHAR(100),
+    city VARCHAR(100),
+    age INTEGER,
+    height INTEGER,
+    weight INTEGER,
+    cup_size VARCHAR(20),
+    occupation VARCHAR(100),
+    introduction_fee DECIMAL(12,2),
+    monthly_allowance DECIMAL(12,2),
+    tags TEXT[],
+    contact_info JSONB,
+    profile_count INTEGER DEFAULT 1,
+    first_seen_at TIMESTAMPTZ DEFAULT NOW(),
+    last_seen_at TIMESTAMPTZ DEFAULT NOW(),
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_persons_channel_code ON persons(channel_id, normalized_code) WHERE normalized_code IS NOT NULL;
+
+ALTER TABLE profiles ADD COLUMN IF NOT EXISTS person_id BIGINT REFERENCES persons(id) ON DELETE SET NULL;
+CREATE INDEX IF NOT EXISTS idx_profiles_person ON profiles(person_id);
+
 -- 媒体文件表
 CREATE TABLE IF NOT EXISTS media_files (
     id BIGSERIAL PRIMARY KEY,
@@ -105,6 +134,8 @@ CREATE TABLE IF NOT EXISTS media_files (
     s3_url TEXT,
     thumb_key VARCHAR(500),
     thumb_url TEXT,
+    local_s3_url TEXT,
+    local_thumb_url TEXT,
     local_path VARCHAR(500),
     ocr_text TEXT,
     is_nsfw BOOLEAN,
