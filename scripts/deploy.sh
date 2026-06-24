@@ -31,11 +31,16 @@ ln -sf "$LOGFILE" "$LOG_DIR/latest.log"
 exec > >(tee -a "$LOGFILE") 2>&1
 
 
-# Ensure .env exists (workflow now injects secrets into /opt/tg-crawler/.env)
+# Ensure .env exists
 if [ -f .env.stored ] && [ ! -f .env ]; then
   echo "Copied .env.stored -> .env"
   cp .env.stored .env
   chmod 600 .env || true
+fi
+# Fallback: symlink .env.local -> .env if .env still missing
+if [ ! -f .env ] && [ -f .env.local ]; then
+  echo "Symlink .env.local -> .env"
+  ln -sf .env.local .env
 fi
 
 # If an old "venv" exists and .venv does not, backup and remove the old one.
@@ -91,6 +96,12 @@ CRAWLER_VENV="$ROOT_DIR/crawler/.venv"
 if [ ! -L "$CRAWLER_VENV" ] || [ ! -d "$CRAWLER_VENV" ]; then
   echo "Creating crawler/.venv symlink -> ../.venv"
   ln -sf ../.venv "$CRAWLER_VENV"
+fi
+
+# Ensure legacy venv symlink exists (pip/uvicorn shebangs hardcode /opt/tg-crawler/venv/...)
+if [ ! -L "$ROOT_DIR/venv" ] || [ ! -d "$ROOT_DIR/venv" ]; then
+  echo "Creating /opt/tg-crawler/venv symlink -> .venv"
+  ln -sf .venv "$ROOT_DIR/venv"
 fi
 
 # Ensure systemd unit points to the .venv python/uvicorn and listens on 127.0.0.1
