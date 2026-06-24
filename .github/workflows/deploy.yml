@@ -29,16 +29,25 @@ jobs:
           key: ${{ secrets.EC2_SSH_KEY }}
           script: |
             set -euxo pipefail
-            if [ ! -f /opt/tg-crawler/deploy.sh ]; then
+            # Prefer top-level deploy.sh, but fall back to scripts/deploy.sh (rsync may place it there).
+            if [ -f /opt/tg-crawler/deploy.sh ]; then
+              DEPLOY_PATH=/opt/tg-crawler/deploy.sh
+            elif [ -f /opt/tg-crawler/scripts/deploy.sh ]; then
+              echo "Found /opt/tg-crawler/scripts/deploy.sh - copying to /opt/tg-crawler/deploy.sh"
+              cp -f /opt/tg-crawler/scripts/deploy.sh /opt/tg-crawler/deploy.sh || sudo cp -f /opt/tg-crawler/scripts/deploy.sh /opt/tg-crawler/deploy.sh
+              DEPLOY_PATH=/opt/tg-crawler/deploy.sh
+            else
               echo "deploy_missing"
               ls -la /opt/tg-crawler || true
               exit 1
             fi
-            if [ ! -x /opt/tg-crawler/deploy.sh ]; then
-              echo "deploy_not_executable - attempting to chmod +x"
-              sudo chmod +x /opt/tg-crawler/deploy.sh || true
+
+            if [ ! -x "$DEPLOY_PATH" ]; then
+              echo "deploy_not_executable - attempting to chmod +x $DEPLOY_PATH"
+              chmod +x "$DEPLOY_PATH" || sudo chmod +x "$DEPLOY_PATH" || true
             fi
-            echo "deploy_present"
+
+            echo "deploy_present $DEPLOY_PATH"
 
       - name: Run deploy script
         uses: appleboy/ssh-action@v1.0.3
