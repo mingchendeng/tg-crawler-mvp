@@ -18,6 +18,16 @@ fi
 echo "Starting deploy script at $(date -u)"
 cd "$ROOT_DIR"
 
+# Create deploy log and redirect all output to it for artifact collection
+LOG_DIR="$ROOT_DIR/deploy_logs"
+mkdir -p "$LOG_DIR"
+chmod 755 "$LOG_DIR" || true
+LOGFILE="$LOG_DIR/$(date -u +%Y%m%dT%H%M%SZ).log"
+ln -sf "$LOGFILE" "$LOG_DIR/latest.log"
+# Redirect stdout/stderr to logfile while still echoing to console
+exec > >(tee -a "$LOGFILE") 2>&1
+
+
 # Ensure .env exists
 if [ -f .env.stored ] && [ ! -f .env ]; then
   echo "Copied .env.stored -> .env"

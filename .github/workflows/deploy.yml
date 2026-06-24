@@ -14,7 +14,7 @@ jobs:
       - name: Deploy to EC2 via rsync
         uses: burnett01/rsync-deployments@7.0.1
         with:
-          switches: -avz --delete --exclude='.venv' --exclude='venv' --exclude='.git' --exclude='__pycache__' --exclude='*.pyc' --exclude='.env*'
+          switches: -avz --delete --exclude='.venv' --exclude='venv' --exclude='.git' --exclude='__pycache__' --exclude='*.pyc' --exclude='.env*' --chmod=Du=rwx,Dg=rx,Do=rx,Fu=rw,Fg=r,Fo=r
           path: .
           remote_path: /opt/tg-crawler
           remote_host: ${{ secrets.EC2_HOST }}
@@ -58,3 +58,21 @@ jobs:
           script: |
             set -xuo pipefail
             bash -x /opt/tg-crawler/deploy.sh
+
+      - name: Fetch deploy logs
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USER }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          script: |
+            set -euxo pipefail
+            ls -la /opt/tg-crawler/deploy_logs || true
+            tail -n +1 /opt/tg-crawler/deploy_logs/latest.log || true
+        env: {}
+
+      - name: Upload deploy logs as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: deploy-logs
+          path: /opt/tg-crawler/deploy_logs/
