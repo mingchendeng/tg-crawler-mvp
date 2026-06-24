@@ -1,0 +1,10 @@
+/* Application-level small overrides and utilities
+   Keep page-specific overrides in templates via extra_css if needed.
+*/
+
+/* Login card styling (centralized so login page doesn't depend on inline styles) */
+.login-card { width: 100%; max-width: 400px; margin: 0 auto; }
+.login-card .card { border: 1px solid #e0e0e0; }
+
+/* Small helper: center content for pages that opt out of sidebar */
+.center-fullpage { margin-left: 0; display: flex; align-items: center; justify-content: center; min-height: 100vh; }
