@@ -30,11 +30,13 @@ from telethon import TelegramClient
 from telethon import errors as tg_errors
 
 import psycopg2
-from fastapi import Depends, FastAPI, Form, HTTPException, Query, Request
+from fastapi import Depends, FastAPI, Form, HTTPException, Query, Request, Body
+
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from psycopg2.extras import RealDictCursor
+from psycopg2.extras import RealDictCursor, Json
+
 
 from auth import (
     LoginRedirect,
@@ -47,6 +49,7 @@ from auth import (
     verify_password,
 )
 from db_util import db_execute
+from crawler.db import Database
 
 app = FastAPI(title='TG Crawler Admin')
 templates = Jinja2Templates(directory='templates')
@@ -887,43 +890,52 @@ def _upsert_profile(db, msg_id: int, payload: Dict[str, Any]):
         'occupation',
         'introduction_fee',
         'monthly_allowance',
+        'expected_allowance',
+        'installments',
+        'monthly_available_days',
     ]
 
     if existing:
         sql = """
-            UPDATE profiles
-            SET display_nickname = %s,
-                internal_code = %s,
-                province = %s,
-                city = %s,
-                age = %s,
-                height = %s,
-                weight = %s,
-                cup_size = %s,
-                occupation = %s,
-                introduction_fee = %s,
-                monthly_allowance = %s,
-                updated_at = NOW()
-            WHERE id = %s
+        UPDATE profiles
+        SET display_nickname = %s,
+            internal_code = %s,
+            province = %s,
+            city = %s,
+            age = %s,
+            height = %s,
+            weight = %s,
+            cup_size = %s,
+            occupation = %s,
+            introduction_fee = %s,
+            monthly_allowance = %s,
+            expected_allowance = %s,
+            installments = %s,
+            monthly_available_days = %s,
+            updated_at = NOW()
+        WHERE id = %s
         """
         values = [payload.get(f) for f in fields] + [existing['id']]
         db_execute(db, sql, tuple(values))
     else:
         sql = """
-            INSERT INTO profiles (
-                message_id,
-                display_nickname,
-                internal_code,
-                province,
-                city,
-                age,
-                height,
-                weight,
-                cup_size,
-                occupation,
-                introduction_fee,
-                monthly_allowance
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        INSERT INTO profiles (
+            message_id,
+            display_nickname,
+            internal_code,
+            province,
+            city,
+            age,
+            height,
+            weight,
+            cup_size,
+            occupation,
+            introduction_fee,
+            monthly_allowance,
+            expected_allowance,
+            installments,
+            monthly_available_days
+        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         """
         values = [msg_id] + [payload.get(f) for f in fields]
         db_execute(db, sql, tuple(values))
@@ -932,7 +944,7 @@ def _upsert_profile(db, msg_id: int, payload: Dict[str, Any]):
 # ==================== 页面路由 ====================
 
 
-@app.get('/', response_class=HTMLResponse)
+
 def _build_message_filter_conditions(
     user: Dict[str, Any],
     province: Optional[str],
@@ -1031,6 +1043,7 @@ def _fetch_deduped_messages(
     return rows
 
 
+@app.get('/', response_class=HTMLResponse)
 async def index(
     request: Request,
     province: Optional[str] = Query(None),
@@ -2745,7 +2758,9 @@ async def update_profile(
     cup_size: Optional[str] = Form(None),
     occupation: Optional[str] = Form(None),
     introduction_fee: Optional[str] = Form(None),
-    monthly_allowance: Optional[str] = Form(None),
+    expected_allowance: Optional[str] = Form(None),
+    installments: Optional[str] = Form(None),
+    monthly_available_days: Optional[str] = Form(None),
     db=Depends(get_db),
 ):
     user = get_current_user(request, db)
@@ -2763,7 +2778,9 @@ async def update_profile(
         'cup_size': (cup_size or '').strip() or None,
         'occupation': (occupation or '').strip() or None,
         'introduction_fee': _parse_float(introduction_fee),
-        'monthly_allowance': _parse_float(monthly_allowance),
+        'expected_allowance': _parse_float(expected_allowance),
+        'installments': _parse_int(installments),
+        'monthly_available_days': _parse_int(monthly_available_days),
     }
 
     _upsert_profile(db, msg_id, payload)
@@ -2780,7 +2797,9 @@ async def update_profile(
             'cup': payload.get('cup_size'),
             'occupation': payload.get('occupation'),
             'intro_fee': payload.get('introduction_fee'),
-            'monthly_allowance': payload.get('monthly_allowance'),
+            'expected_allowance': payload.get('expected_allowance'),
+            'installments': payload.get('installments'),
+            'monthly_available_days': payload.get('monthly_available_days'),
         }
         pn = db_execute(db, 'SELECT id FROM profiles WHERE message_id = %s ORDER BY id LIMIT 1', (msg_id,)).fetchone()
         if pn:
@@ -2905,34 +2924,52 @@ async def toggle_block(profile_id: int, request: Request, db=Depends(get_db)):
     return {'ok': True, 'is_blocked': new_val}
 
 
-@app.get('/api/profile/stats')
-async def profile_stats(request: Request, db=Depends(get_db)):
+@app.get('/api/achievements')
+async def api_achievements(request: Request, db=Depends(get_db)):
+    user = get_current_user(request, db)
+    rows = db_execute(
+        db,
+        "SELECT id, steam_id, name, description, hidden FROM achievements ORDER BY id",
+    ).fetchall()
+    return {'ok': True, 'achievements': [dict(r) for r in rows]}
+
+@app.get('/api/achievements/unlock')
+async def _unlock_not_allowed():
+    raise HTTPException(405, "此接口只能使用 POST 并在请求体中提供 steam_id")
+
+
+# ==================== Cloud Saves ====================
+
+@app.get('/api/cloud/save')
+async def _cloud_save_not_allowed():
+    raise HTTPException(405, "此接口只能使用 POST 并在请求体中提供 name 与 data")
+
+@app.get('/api/cloud/load')
+async def api_cloud_load(request: Request, name: str = Query(...), db=Depends(get_db)):
     user = get_current_user(request, db)
     row = db_execute(
         db,
-        """
-        SELECT
-            COUNT(*) FILTER (WHERE is_liked = true) AS liked,
-            COUNT(*) FILTER (WHERE is_blocked = true) AS blocked
-        FROM profiles
-        """,
+        "SELECT data FROM cloud_saves WHERE user_id = %s AND save_name = %s",
+        (user['id'], name),
     ).fetchone()
-    return {'ok': True, 'liked': row['liked'], 'blocked': row['blocked']}
+    if not row:
+        raise HTTPException(404, 'save not found')
+    return {'ok': True, 'data': row['data']}
 
+# ==================== Lobbies ====================
 
-# ==================== Persons ====================
+@app.get('/api/lobby/create')
+async def _lobby_create_not_allowed():
+    raise HTTPException(405, "此接口只能使用 POST 创建房间")
 
+@app.get('/api/lobby/join')
+async def _lobby_join_not_allowed():
+    raise HTTPException(405, "此接口只能使用 POST 加入房间")
 
-@app.post('/api/persons/merge')
-async def merge_persons(
-    request: Request,
-    source_person_id: int = Form(...),
-    target_person_id: int = Form(...),
-    db=Depends(get_db),
-):
-    user = get_current_user(request, db)
-    if not is_admin(user):
-        raise HTTPException(403, '仅管理员可合并人物')
+@app.get('/api/lobby/leave')
+async def _lobby_leave_not_allowed():
+    raise HTTPException(405, "此接口只能使用 POST 退出房间")
+
 
     if source_person_id == target_person_id:
         return {'ok': False, 'error': '不能合并到自身'}
@@ -3043,6 +3080,15 @@ async def backfill_persons_api(request: Request, db=Depends(get_db)):
 
     db.commit()
     return {'ok': True, 'backfilled': count}
+
+@app.post('/api/persons/deduplicate')
+async def deduplicate_persons_api(request: Request, db=Depends(get_db)):
+    """Admin endpoint to deduplicate persons across all channels."""
+    user = get_current_user(request, db)
+    if not is_admin(user):
+        raise HTTPException(403, '仅管理员可操作')
+    merged = Database().deduplicate_persons()
+    return {'ok': True, 'merged': merged}
 
 
 # ==================== Media ====================
