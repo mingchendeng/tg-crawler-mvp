@@ -289,16 +289,24 @@ class Database:
         else:
             contacts = None
 
+        def _truncate(value, max_len):
+            if value is None:
+                return None
+            text = str(value).strip()
+            if not text:
+                return None
+            return text[:max_len]
+
         payload = {
-            'display_nickname': (extracted.get('nickname') or '').strip() or None,
-            'internal_code': _normalize_code(extracted.get('code')),
-            'province': (extracted.get('province') or '').strip() or None,
-            'city': (extracted.get('city') or '').strip() or None,
+            'display_nickname': _truncate(extracted.get('nickname'), 255),
+            'internal_code': _truncate(_normalize_code(extracted.get('code')), 50),
+            'province': _truncate(extracted.get('province'), 100),
+            'city': _truncate(extracted.get('city'), 100),
             'age': _to_int(extracted.get('age')),
             'height': _to_int(extracted.get('height')),
             'weight': _to_int(extracted.get('weight')),
-            'cup_size': (extracted.get('cup') or '').strip() or None,
-            'occupation': (extracted.get('occupation') or '').strip() or None,
+            'cup_size': _truncate(extracted.get('cup'), 20),
+            'occupation': _truncate(extracted.get('occupation'), 100),
             'is_virgin': _to_bool(extracted.get('is_virgin')),
             'oral_available': _to_bool(extracted.get('oral')),
             'creampie_available': _to_bool(extracted.get('creampie')),

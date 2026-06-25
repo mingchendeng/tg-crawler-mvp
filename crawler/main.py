@@ -685,6 +685,10 @@ class IncrementalCrawler:
             self._append_error(error_details, f'Channel level failure: {e}')
             logger.exception('Channel crawl failed: %s', channel_name)
             status = 'failed'
+            try:
+                self.db.rollback()
+            except Exception:
+                pass
 
         self.db.finish_crawl_log(log_id, status, processed, new_count, errors_count, error_details)
         logger.info(
