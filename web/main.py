@@ -14,6 +14,7 @@ import tempfile
 import threading
 import time
 import uuid
+from datetime import datetime
 from typing import Any, Dict, List, Optional
 from urllib.parse import urlencode
 
@@ -355,6 +356,17 @@ def _normalize_province(raw: Optional[str]) -> Optional[str]:
         return '台湾'
 
     return None
+
+
+def _serialize_media_for_template(media_row) -> Dict[str, Any]:
+    """Convert a media_files row to a JSON-safe dict for template use."""
+    result: Dict[str, Any] = {}
+    for key, value in media_row.items():
+        if isinstance(value, datetime):
+            result[key] = value.isoformat()
+        else:
+            result[key] = value
+    return result
 
 
 def _normalize_code(value: Optional[str]) -> Optional[str]:
@@ -1489,7 +1501,8 @@ async def detail(msg_id: int, request: Request, db=Depends(get_db)):
         raise HTTPException(404, '消息不存在')
 
     profile = db_execute(db, 'SELECT * FROM profiles WHERE message_id = %s ORDER BY id LIMIT 1', (msg_id,)).fetchone()
-    media = db_execute(db, 'SELECT * FROM media_files WHERE message_id = %s ORDER BY id', (msg_id,)).fetchall()
+    media_rows = db_execute(db, 'SELECT * FROM media_files WHERE message_id = %s ORDER BY id', (msg_id,)).fetchall()
+    media = [_serialize_media_for_template(m) for m in media_rows]
     logs = db_execute(
         db,
         'SELECT l.*, r.username as reviewer_name FROM audit_logs l LEFT JOIN reviewers r ON r.id = l.reviewer_id WHERE l.message_id = %s ORDER BY l.created_at DESC',
