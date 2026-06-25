@@ -74,6 +74,15 @@ def _normalize_code(value):
     return text or None
 
 
+def _truncate(value, max_len: int):
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    return text[:max_len]
+
+
 def _is_empty_value(value):
     if value is None:
         return True
@@ -289,14 +298,6 @@ class Database:
         else:
             contacts = None
 
-        def _truncate(value, max_len):
-            if value is None:
-                return None
-            text = str(value).strip()
-            if not text:
-                return None
-            return text[:max_len]
-
         payload = {
             'display_nickname': _truncate(extracted.get('nickname'), 255),
             'internal_code': _truncate(_normalize_code(extracted.get('code')), 50),
@@ -452,14 +453,14 @@ class Database:
     def ensure_person(self, channel_id: int, code: Any, extracted: dict, owner_user_id=None):
         normalized_code = _normalize_code(code)
         if not normalized_code:
-            row = self.fetchone(
-                """INSERT INTO persons (owner_user_id, channel_id, display_nickname)
+        row = self.fetchone(
+            """INSERT INTO persons (owner_user_id, channel_id, display_nickname)
                    VALUES (%s, %s, %s)
                    RETURNING id""",
-                (owner_user_id, channel_id, (extracted.get('nickname') or '').strip() or None),
-            )
-            self.commit()
-            return row[0]
+            (owner_user_id, channel_id, _truncate(extracted.get('nickname'), 255)),
+        )
+        self.commit()
+        return row[0]
 
         row = self.fetchone(
             "SELECT id FROM persons WHERE channel_id = %s AND normalized_code = %s",
@@ -472,7 +473,7 @@ class Database:
                        last_seen_at = NOW(),
                        display_nickname = COALESCE(NULLIF(%s, ''), display_nickname)
                    WHERE id = %s""",
-                ((extracted.get('nickname') or '').strip(), row[0]),
+                (_truncate(extracted.get('nickname'), 255), row[0]),
             )
             self.commit()
             return row[0]
@@ -488,14 +489,14 @@ class Database:
                RETURNING id""",
             (
                 owner_user_id, channel_id, normalized_code,
-                (extracted.get('nickname') or '').strip() or None,
-                (extracted.get('province') or '').strip() or None,
-                (extracted.get('city') or '').strip() or None,
+                _truncate(extracted.get('nickname'), 255),
+                _truncate(extracted.get('province'), 100),
+                _truncate(extracted.get('city'), 100),
                 _to_int(extracted.get('age')),
                 _to_int(extracted.get('height')),
                 _to_int(extracted.get('weight')),
-                (extracted.get('cup') or '').strip() or None,
-                (extracted.get('occupation') or '').strip() or None,
+                _truncate(extracted.get('cup'), 20),
+                _truncate(extracted.get('occupation'), 100),
                 _to_float(extracted.get('intro_fee')),
                 _to_float(extracted.get('monthly_allowance')),
                 tags,
