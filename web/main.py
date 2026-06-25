@@ -366,6 +366,11 @@ def _serialize_media_for_template(media_row) -> Dict[str, Any]:
             result[key] = value.isoformat()
         else:
             result[key] = value
+    # Use internal S3 proxy so private bucket URLs don't 403
+    mid = result.get('id')
+    if mid is not None:
+        result['s3_url'] = f'/s3/{mid}'
+        result['thumb_url'] = f'/s3/{mid}?thumb=1'
     return result
 
 
