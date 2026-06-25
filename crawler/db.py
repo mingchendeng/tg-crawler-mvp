@@ -453,14 +453,14 @@ class Database:
     def ensure_person(self, channel_id: int, code: Any, extracted: dict, owner_user_id=None):
         normalized_code = _normalize_code(code)
         if not normalized_code:
-        row = self.fetchone(
-            """INSERT INTO persons (owner_user_id, channel_id, display_nickname)
-                   VALUES (%s, %s, %s)
-                   RETURNING id""",
-            (owner_user_id, channel_id, _truncate(extracted.get('nickname'), 255)),
-        )
-        self.commit()
-        return row[0]
+            row = self.fetchone(
+                """INSERT INTO persons (owner_user_id, channel_id, display_nickname)
+                       VALUES (%s, %s, %s)
+                       RETURNING id""",
+                (owner_user_id, channel_id, _truncate(extracted.get('nickname'), 255)),
+            )
+            self.commit()
+            return row[0]
 
         row = self.fetchone(
             "SELECT id FROM persons WHERE channel_id = %s AND normalized_code = %s",
