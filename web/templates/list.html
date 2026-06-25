@@ -13,17 +13,17 @@
         <span class="badge bg-dark me-1">✋ 拉黑</span>
         <a href="/" class="btn btn-sm btn-outline-secondary">✕ 清除</a>
         {% endif %}
-        <span class="text-muted small ms-2">共 {{ pagination.total }} 条</span>
+        <span class="text-muted small ms-2" id="loadStatus">已加载 {{ rows|length }} 条</span>
     </div>
-    <form method="get" class="d-flex gap-2 align-items-center">
+    <form method="get" class="d-flex gap-2 align-items-center" id="filterForm">
         {% if filters.province %}<input type="hidden" name="province" value="{{ filters.province }}">{% endif %}
         {% if filters.liked %}<input type="hidden" name="liked" value="1">{% endif %}
         {% if filters.blocked %}<input type="hidden" name="blocked" value="1">{% endif %}
         <input type="text" name="keyword" class="form-control form-control-sm" style="width:200px" value="{{ filters.keyword }}" placeholder="关键词搜索">
         <select name="page_size" class="form-select form-select-sm" style="width:80px" onchange="this.form.submit()">
-            <option value="50" {% if pagination.page_size == 50 %}selected{% endif %}>50</option>
-            <option value="100" {% if pagination.page_size == 100 %}selected{% endif %}>100</option>
-            <option value="200" {% if pagination.page_size == 200 %}selected{% endif %}>200</option>
+            <option value="50" {% if page_size == 50 %}selected{% endif %}>50</option>
+            <option value="100" {% if page_size == 100 %}selected{% endif %}>100</option>
+            <option value="200" {% if page_size == 200 %}selected{% endif %}>200</option>
         </select>
         <button type="submit" class="btn btn-primary btn-sm">搜索</button>
     </form>
@@ -31,7 +31,7 @@
 
 <div class="card">
     <div class="table-responsive">
-        <table class="table table-hover table-sm align-middle mb-0">
+        <table class="table table-hover table-sm align-middle mb-0" id="messageTable">
             <thead class="table-light">
                 <tr>
                     <th>昵称/编号</th>
@@ -46,19 +46,19 @@
                     <th>操作</th>
                 </tr>
             </thead>
-            <tbody>
+            <tbody id="messageTbody">
                 {% set last_province = namespace(value='') %}
                 {% for row in rows %}
                 {% set province_name = row.province or '' %}
                 {% if province_name and province_name != last_province.value %}
-                <tr class="table-secondary">
+                <tr class="table-secondary province-separator" data-province="{{ province_name }}">
                     <td colspan="10" class="small fw-bold py-1" style="background:#e9ecef;">
                         ─ {{ province_name }} ─
                     </td>
                 </tr>
                 {% set last_province.value = province_name %}
                 {% endif %}
-                <tr>
+                <tr data-row-id="{{ row.id }}">
                     <td>
                         <div class="fw-bold">{{ row.nickname or '-' }}</div>
                         {% if row.extracted_json and row.extracted_json.get('code') %}
@@ -80,38 +80,150 @@
                     </td>
                 </tr>
                 {% else %}
-                <tr><td colspan="10" class="text-center text-muted py-4">没有匹配记录</td></tr>
+                <tr id="emptyRow"><td colspan="10" class="text-center text-muted py-4">没有匹配记录</td></tr>
                 {% endfor %}
             </tbody>
         </table>
     </div>
 </div>
 
-{% if pagination.total_pages > 1 %}
-<nav class="mt-3">
-    <ul class="pagination pagination-sm justify-content-center">
-        {% if pagination.page > 1 %}
-        <li class="page-item"><a class="page-link" href="/?page={{ pagination.page-1 }}{% if page_query %}&{{ page_query }}{% endif %}">上一页</a></li>
-        {% endif %}
-        {% for p in range(1, pagination.total_pages+1) %}
-        {% if p == pagination.page or (p >= pagination.page-2 and p <= pagination.page+2) or p == 1 or p == pagination.total_pages %}
-        <li class="page-item {% if p == pagination.page %}active{% endif %}">
-            <a class="page-link" href="/?page={{ p }}{% if page_query %}&{{ page_query }}{% endif %}">{{ p }}</a>
-        </li>
-        {% elif p == pagination.page-3 or p == pagination.page+3 %}
-        <li class="page-item disabled"><span class="page-link">...</span></li>
-        {% endif %}
-        {% endfor %}
-        {% if pagination.page < pagination.total_pages %}
-        <li class="page-item"><a class="page-link" href="/?page={{ pagination.page+1 }}{% if page_query %}&{{ page_query }}{% endif %}">下一页</a></li>
-        {% endif %}
-    </ul>
-</nav>
-{% endif %}
+<div id="loadMoreSentinel" class="text-center py-3" style="display:none;">
+    <div class="spinner-border spinner-border-sm text-primary" role="status"></div>
+    <span class="small text-muted ms-2">加载中...</span>
+</div>
+<div id="loadMoreEnd" class="text-center py-3 small text-muted" style="display:none;">─ 到底了 ─</div>
 {% endblock %}
 
 {% block extra_js %}
 <script>
+const PAGE_SIZE = {{ page_size }};
+const FILTERS = {
+    province: {{ filters.province | tojson }},
+    liked: {{ filters.liked | tojson }},
+    blocked: {{ filters.blocked | tojson }},
+    keyword: {{ filters.keyword | tojson }},
+};
+let currentPage = {{ page }};
+let hasMore = {{ has_more | tojson }};
+let loading = false;
+
+function formatDate(iso) {
+    if (!iso) return '-';
+    const d = new Date(iso);
+    const mm = String(d.getMonth() + 1).padStart(2, '0');
+    const dd = String(d.getDate()).padStart(2, '0');
+    const HH = String(d.getHours()).padStart(2, '0');
+    const MM = String(d.getMinutes()).padStart(2, '0');
+    return mm + '-' + dd + ' ' + HH + ':' + MM;
+}
+
+function formatFee(fee) {
+    if (fee === null || fee === undefined || fee === '') return '-';
+    return '<span class="text-danger fw-bold">' + Math.round(fee) + '</span>';
+}
+
+function renderRow(row) {
+    const codeHtml = row.code ? '<div class="small text-muted">' + escapeHtml(row.code) + '</div>' : '';
+    const mediaHtml = row.media_count > 0
+        ? '<span class="badge bg-info" style="cursor:pointer" onclick="previewMessageMedia(' + row.id + ')">' + row.media_count + '</span>'
+        : '-';
+    const likeClass = row.is_liked ? 'btn-danger' : 'btn-outline-danger';
+    const blockClass = row.is_blocked ? 'btn-dark' : 'btn-outline-dark';
+    return '<tr data-row-id="' + row.id + '">'
+        + '<td><div class="fw-bold">' + escapeHtml(row.nickname || '-') + '</div>' + codeHtml + '</td>'
+        + '<td>' + escapeHtml(row.province || '-') + ' ' + escapeHtml(row.city || '') + '</td>'
+        + '<td>' + (row.age || '-') + '</td>'
+        + '<td>' + (row.height || '?') + '/' + (row.weight || '?') + '</td>'
+        + '<td>' + escapeHtml(row.occupation || '-') + '</td>'
+        + '<td>' + formatFee(row.introduction_fee) + '</td>'
+        + '<td class="small">' + formatDate(row.telegram_date) + '</td>'
+        + '<td><span class="badge bg-secondary">' + escapeHtml(row.channel_name || '') + '</span></td>'
+        + '<td>' + mediaHtml + '</td>'
+        + '<td class="text-nowrap">'
+        + '<a href="/detail/' + row.id + '" class="btn btn-sm btn-outline-primary me-1">详情</a>'
+        + '<button class="btn btn-sm ' + likeClass + ' like-btn" data-profile-id="' + (row.profile_id || '') + '" onclick="toggleLike(this)">❤</button>'
+        + '<button class="btn btn-sm ' + blockClass + ' block-btn" data-profile-id="' + (row.profile_id || '') + '" onclick="toggleBlock(this)">✋</button>'
+        + '</td></tr>';
+}
+
+function escapeHtml(text) {
+    if (text === null || text === undefined) return '';
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+}
+
+async function loadMore() {
+    if (loading || !hasMore) return;
+    loading = true;
+    document.getElementById('loadMoreSentinel').style.display = '';
+    try {
+        const params = new URLSearchParams();
+        params.set('page', currentPage + 1);
+        params.set('page_size', PAGE_SIZE);
+        if (FILTERS.province) params.set('province', FILTERS.province);
+        if (FILTERS.liked) params.set('liked', '1');
+        if (FILTERS.blocked) params.set('blocked', '1');
+        if (FILTERS.keyword) params.set('keyword', FILTERS.keyword);
+
+        const resp = await fetch('/api/messages?' + params.toString());
+        const data = await resp.json();
+        if (!data.ok) {
+            showToast('加载失败', 'danger');
+            return;
+        }
+
+        const tbody = document.getElementById('messageTbody');
+        const emptyRow = document.getElementById('emptyRow');
+        if (emptyRow) emptyRow.remove();
+
+        let lastProv = '';
+        const lastSep = tbody.querySelector('.province-separator:last-child');
+        if (lastSep) lastProv = lastSep.dataset.province || '';
+
+        for (const row of data.rows) {
+            if (row.province && row.province !== lastProv) {
+                tbody.insertAdjacentHTML('beforeend',
+                    '<tr class="table-secondary province-separator" data-province="' + escapeHtml(row.province) + '">'
+                    + '<td colspan="10" class="small fw-bold py-1" style="background:#e9ecef;">─ ' + escapeHtml(row.province) + ' ─</td></tr>');
+                lastProv = row.province;
+            }
+            tbody.insertAdjacentHTML('beforeend', renderRow(row));
+        }
+
+        currentPage = data.page;
+        hasMore = data.has_more;
+        document.getElementById('loadStatus').textContent = '已加载 ' + tbody.querySelectorAll('tr[data-row-id]').length + ' 条';
+
+        if (!hasMore) {
+            document.getElementById('loadMoreSentinel').style.display = 'none';
+            document.getElementById('loadMoreEnd').style.display = '';
+        }
+    } catch (e) {
+        showToast('加载失败: ' + e.message, 'danger');
+    } finally {
+        loading = false;
+        if (hasMore) {
+            document.getElementById('loadMoreSentinel').style.display = '';
+        }
+    }
+}
+
+function initLazyLoad() {
+    if (!hasMore) {
+        document.getElementById('loadMoreEnd').style.display = '';
+        return;
+    }
+    document.getElementById('loadMoreSentinel').style.display = '';
+    const sentinel = document.getElementById('loadMoreSentinel');
+    const observer = new IntersectionObserver((entries) => {
+        if (entries[0].isIntersecting) {
+            loadMore();
+        }
+    }, { rootMargin: '200px' });
+    observer.observe(sentinel);
+}
+
 async function toggleLike(btn) {
     const profileId = btn.dataset.profileId;
     if (!profileId) return;
@@ -156,20 +268,6 @@ async function previewMessageMedia(msgId) {
     }
 }
 
-async function refreshPipelineStatus() {
-    try {
-        const resp = await fetch('/api/system/status');
-        const payload = await resp.json();
-        if (!resp.ok || !payload.ok) return;
-        const s = payload.status;
-        const ready = !!s.ready.crawler_pipeline;
-        const badge = document.getElementById('pipelineStatusBadge');
-        if (badge) {
-            badge.className = 'badge ' + (ready ? 'bg-success' : 'bg-warning text-dark');
-            badge.textContent = ready ? '已就绪' : '未就绪';
-        }
-    } catch (_) {}
-}
-setInterval(refreshPipelineStatus, 15000);
+initLazyLoad();
 </script>
 {% endblock %}

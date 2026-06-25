@@ -933,23 +933,14 @@ def _upsert_profile(db, msg_id: int, payload: Dict[str, Any]):
 
 
 @app.get('/', response_class=HTMLResponse)
-async def index(
-    request: Request,
-    province: Optional[str] = Query(None),
-    liked: Optional[str] = Query(None),
-    blocked: Optional[str] = Query(None),
-    keyword: Optional[str] = Query(None),
-    page: int = Query(1, ge=1),
-    page_size: int = Query(50, ge=1, le=200),
-    db=Depends(get_db),
-):
-    user = get_current_user(request, db)
-    runtime_status = _collect_runtime_status(db)
-    page_size = _require_positive_page_size(page_size)
-
-    age_expr = "COALESCE(p.age, CASE WHEN (m.extracted_json->>'age') ~ '^[0-9]+$' THEN (m.extracted_json->>'age')::int END)"
-    fee_expr = "COALESCE(p.introduction_fee, CASE WHEN (m.extracted_json->>'intro_fee') ~ '^[0-9]+(\\.[0-9]+)?$' THEN (m.extracted_json->>'intro_fee')::numeric END)"
-
+def _build_message_filter_conditions(
+    user: Dict[str, Any],
+    province: Optional[str],
+    liked: Optional[str],
+    blocked: Optional[str],
+    keyword: Optional[str],
+) -> tuple[List[str], Dict[str, Any]]:
+    """Build WHERE conditions and params for message/person listing."""
     conditions = ['1=1']
     params: Dict[str, Any] = {}
     _append_message_scope(user, conditions, params, alias='m')
@@ -968,54 +959,97 @@ async def index(
         conditions.append("(m.text_content ILIKE %(kw)s OR m.extracted_json::text ILIKE %(kw)s OR COALESCE(p.display_nickname, '') ILIKE %(kw)s OR EXISTS (SELECT 1 FROM media_files mf WHERE mf.message_id = m.id AND mf.ocr_text ILIKE %(kw)s))")
         params['kw'] = f'%{keyword}%'
 
-    where_clause = ' AND '.join(conditions)
+    return conditions, params
 
+
+def _fetch_deduped_messages(
+    db,
+    user: Dict[str, Any],
+    province: Optional[str] = None,
+    liked: Optional[str] = None,
+    blocked: Optional[str] = None,
+    keyword: Optional[str] = None,
+    page: int = 1,
+    page_size: int = 50,
+    extra_limit: int = 0,
+) -> List[Any]:
+    """Return messages deduplicated by person (latest message per person)."""
+    page_size = _require_positive_page_size(page_size)
+    conditions, params = _build_message_filter_conditions(user, province, liked, blocked, keyword)
+    where_clause = ' AND '.join(conditions)
     offset = (page - 1) * page_size
+
+    age_expr = "COALESCE(p.age, CASE WHEN (m.extracted_json->>'age') ~ '^[0-9]+$' THEN (m.extracted_json->>'age')::int END)"
+    fee_expr = "COALESCE(p.introduction_fee, CASE WHEN (m.extracted_json->>'intro_fee') ~ '^[0-9]+(\\.[0-9]+)?$' THEN (m.extracted_json->>'intro_fee')::numeric END)"
+
     query_sql = f"""
-        SELECT
-            m.id, m.telegram_message_id, m.telegram_date,
-            m.extracted_json,
-            COALESCE(p.display_nickname, m.extracted_json->>'nickname') AS nickname,
-            COALESCE(p.province, m.extracted_json->>'province') AS province,
-            COALESCE(p.city, m.extracted_json->>'city') AS city,
-            {age_expr} AS age,
-            COALESCE(p.height, CASE WHEN (m.extracted_json->>'height') ~ '^[0-9]+$' THEN (m.extracted_json->>'height')::int END) AS height,
-            COALESCE(p.weight, CASE WHEN (m.extracted_json->>'weight') ~ '^[0-9]+$' THEN (m.extracted_json->>'weight')::int END) AS weight,
-            COALESCE(p.cup_size, m.extracted_json->>'cup') AS cup_size,
-            COALESCE(p.occupation, m.extracted_json->>'occupation') AS occupation,
-            {fee_expr} AS introduction_fee,
-            COALESCE(p.monthly_allowance, CASE WHEN (m.extracted_json->>'monthly_allowance') ~ '^[0-9]+(\\.[0-9]+)?$' THEN (m.extracted_json->>'monthly_allowance')::numeric END) AS monthly_allowance,
-            c.username AS channel_name,
-            m.text_content,
-            p.is_liked, p.is_blocked, p.id AS profile_id,
-            (SELECT COUNT(*) FROM media_files WHERE message_id = m.id) AS media_count
-        FROM messages m
-        LEFT JOIN profiles p ON p.message_id = m.id
-        LEFT JOIN channels c ON c.id = m.channel_id
-        WHERE {where_clause}
-        ORDER BY province ASC NULLS LAST, m.telegram_date DESC, m.id DESC
+        WITH ranked AS (
+            SELECT
+                m.id, m.telegram_message_id, m.telegram_date,
+                m.extracted_json,
+                COALESCE(p.display_nickname, m.extracted_json->>'nickname') AS nickname,
+                COALESCE(p.province, m.extracted_json->>'province') AS province,
+                COALESCE(p.city, m.extracted_json->>'city') AS city,
+                {age_expr} AS age,
+                COALESCE(p.height, CASE WHEN (m.extracted_json->>'height') ~ '^[0-9]+$' THEN (m.extracted_json->>'height')::int END) AS height,
+                COALESCE(p.weight, CASE WHEN (m.extracted_json->>'weight') ~ '^[0-9]+$' THEN (m.extracted_json->>'weight')::int END) AS weight,
+                COALESCE(p.cup_size, m.extracted_json->>'cup') AS cup_size,
+                COALESCE(p.occupation, m.extracted_json->>'occupation') AS occupation,
+                {fee_expr} AS introduction_fee,
+                COALESCE(p.monthly_allowance, CASE WHEN (m.extracted_json->>'monthly_allowance') ~ '^[0-9]+(\\.[0-9]+)?$' THEN (m.extracted_json->>'monthly_allowance')::numeric END) AS monthly_allowance,
+                c.username AS channel_name,
+                m.text_content,
+                p.is_liked, p.is_blocked, p.id AS profile_id,
+                (SELECT COUNT(*) FROM media_files WHERE message_id = m.id) AS media_count,
+                ROW_NUMBER() OVER (
+                    PARTITION BY
+                        CASE
+                            WHEN p.person_id IS NOT NULL THEN 'person:' || p.person_id::text
+                            WHEN p.internal_code IS NOT NULL AND p.internal_code != '' THEN 'code:' || p.internal_code
+                            WHEN COALESCE(p.display_nickname, m.extracted_json->>'nickname') IS NOT NULL
+                                THEN 'nick:' || COALESCE(p.display_nickname, m.extracted_json->>'nickname')
+                            ELSE 'msg:' || m.id::text
+                        END
+                    ORDER BY m.telegram_date DESC NULLS LAST, m.id DESC
+                ) AS rn
+            FROM messages m
+            LEFT JOIN profiles p ON p.message_id = m.id
+            LEFT JOIN channels c ON c.id = m.channel_id
+            WHERE {where_clause}
+        )
+        SELECT * FROM ranked WHERE rn = 1
+        ORDER BY telegram_date DESC NULLS LAST, id DESC
         LIMIT %(limit)s OFFSET %(offset)s
     """
     query_params = dict(params)
-    query_params['limit'] = page_size
+    query_params['limit'] = page_size + extra_limit
     query_params['offset'] = offset
     rows = db_execute(db, query_sql, query_params).fetchall()
     for row in rows:
         raw_prov = row.get('province')
         row['province'] = _normalize_province(raw_prov)
+    return rows
 
-    total = db_execute(
-        db,
-        f"""
-        SELECT COUNT(*) AS cnt
-        FROM messages m
-        LEFT JOIN profiles p ON p.message_id = m.id
-        WHERE {where_clause}
-        """,
-        dict(params),
-    ).fetchone()['cnt']
 
-    total_pages = (total + page_size - 1) // page_size
+async def index(
+    request: Request,
+    province: Optional[str] = Query(None),
+    liked: Optional[str] = Query(None),
+    blocked: Optional[str] = Query(None),
+    keyword: Optional[str] = Query(None),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(50, ge=1, le=200),
+    db=Depends(get_db),
+):
+    user = get_current_user(request, db)
+    runtime_status = _collect_runtime_status(db)
+    page_size = _require_positive_page_size(page_size)
+
+    rows = _fetch_deduped_messages(
+        db, user, province=province, liked=liked, blocked=blocked, keyword=keyword,
+        page=page, page_size=page_size,
+    )
+
     filter_values = {
         'province': province or '',
         'liked': liked or '',
@@ -1023,7 +1057,6 @@ async def index(
         'keyword': keyword or '',
         'page_size': page_size,
     }
-    page_query = _query_string({k: v for k, v in filter_values.items() if v})
 
     return templates.TemplateResponse(
         request=request,
@@ -1032,11 +1065,68 @@ async def index(
             'user': user,
             'rows': rows,
             'runtime_status': runtime_status,
-            'pagination': {'page': page, 'page_size': page_size, 'total': total, 'total_pages': total_pages},
             'filters': filter_values,
-            'page_query': page_query,
+            'has_more': len(rows) == page_size,
+            'page': page,
+            'page_size': page_size,
         },
     )
+
+
+@app.get('/api/messages')
+async def api_messages(
+    request: Request,
+    province: Optional[str] = Query(None),
+    liked: Optional[str] = Query(None),
+    blocked: Optional[str] = Query(None),
+    keyword: Optional[str] = Query(None),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(50, ge=1, le=200),
+    db=Depends(get_db),
+):
+    """JSON endpoint for lazy-loaded message list, deduplicated by person."""
+    user = get_current_user(request, db)
+    page_size = _require_positive_page_size(page_size)
+    rows = _fetch_deduped_messages(
+        db, user, province=province, liked=liked, blocked=blocked, keyword=keyword,
+        page=page, page_size=page_size, extra_limit=1,
+    )
+
+    has_more = len(rows) > page_size
+    if has_more:
+        rows = rows[:-1]
+
+    result_rows = []
+    for r in rows:
+        extracted = r.get('extracted_json') or {}
+        result_rows.append({
+            'id': r['id'],
+            'profile_id': r['profile_id'],
+            'nickname': r['nickname'],
+            'code': extracted.get('code') if isinstance(extracted, dict) else None,
+            'province': r['province'],
+            'city': r['city'],
+            'age': r['age'],
+            'height': r['height'],
+            'weight': r['weight'],
+            'cup_size': r['cup_size'],
+            'occupation': r['occupation'],
+            'introduction_fee': float(r['introduction_fee']) if r['introduction_fee'] is not None else None,
+            'monthly_allowance': float(r['monthly_allowance']) if r['monthly_allowance'] is not None else None,
+            'telegram_date': r['telegram_date'].isoformat() if r['telegram_date'] else None,
+            'channel_name': r['channel_name'],
+            'media_count': r['media_count'],
+            'is_liked': r['is_liked'],
+            'is_blocked': r['is_blocked'],
+        })
+
+    return {
+        'ok': True,
+        'page': page,
+        'page_size': page_size,
+        'has_more': has_more,
+        'rows': result_rows,
+    }
 
 
 @app.get('/ops', response_class=HTMLResponse)

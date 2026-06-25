@@ -166,7 +166,7 @@ class IncrementalCrawler:
                     self.deduper.candidate_limit,
                 )
             else:
-                logger.info('LLM dedupe disabled; only exact extracted code match when code is present')
+                logger.info('Rule-based dedup active: normalized nickname+code / nickname / code match')
 
             reports = []
             for channel_name in self.target_channels:
