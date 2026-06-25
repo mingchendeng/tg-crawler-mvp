@@ -74,6 +74,16 @@ def _normalize_code(value):
     return text or None
 
 
+def _normalize_nickname(value):
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    text = re.sub(r'[^\u4e00-\u9fa5A-Za-z0-9]', '', text)
+    return text or None
+
+
 def _truncate(value, max_len: int):
     if value is None:
         return None
@@ -452,32 +462,50 @@ class Database:
 
     def ensure_person(self, channel_id: int, code: Any, extracted: dict, owner_user_id=None):
         normalized_code = _normalize_code(code)
-        if not normalized_code:
+        display_nickname = _truncate(extracted.get('nickname'), 255)
+        normalized_nickname = _normalize_nickname(display_nickname)
+
+        # 1) Match by normalized code (most reliable)
+        if normalized_code:
             row = self.fetchone(
-                """INSERT INTO persons (owner_user_id, channel_id, display_nickname)
-                       VALUES (%s, %s, %s)
-                       RETURNING id""",
-                (owner_user_id, channel_id, _truncate(extracted.get('nickname'), 255)),
+                "SELECT id FROM persons WHERE channel_id = %s AND normalized_code = %s",
+                (channel_id, normalized_code),
             )
-            self.commit()
-            return row[0]
+            if row:
+                self.execute(
+                    """UPDATE persons
+                       SET profile_count = profile_count + 1,
+                           last_seen_at = NOW(),
+                           display_nickname = COALESCE(NULLIF(%s, ''), display_nickname)
+                       WHERE id = %s""",
+                    (display_nickname, row[0]),
+                )
+                self.commit()
+                return row[0]
 
-        row = self.fetchone(
-            "SELECT id FROM persons WHERE channel_id = %s AND normalized_code = %s",
-            (channel_id, normalized_code),
-        )
-        if row:
-            self.execute(
-                """UPDATE persons
-                   SET profile_count = profile_count + 1,
-                       last_seen_at = NOW(),
-                       display_nickname = COALESCE(NULLIF(%s, ''), display_nickname)
-                   WHERE id = %s""",
-                (_truncate(extracted.get('nickname'), 255), row[0]),
+        # 2) Fallback: match by normalized nickname within the same channel
+        if normalized_nickname:
+            row = self.fetchone(
+                """SELECT id FROM persons
+                   WHERE channel_id = %s
+                     AND _normalize_nickname(COALESCE(display_nickname, '')) = %s
+                     AND normalized_code IS NULL
+                   LIMIT 1""",
+                (channel_id, normalized_nickname),
             )
-            self.commit()
-            return row[0]
+            if row:
+                self.execute(
+                    """UPDATE persons
+                       SET profile_count = profile_count + 1,
+                           last_seen_at = NOW(),
+                           display_nickname = COALESCE(NULLIF(%s, ''), display_nickname)
+                       WHERE id = %s""",
+                    (display_nickname, row[0]),
+                )
+                self.commit()
+                return row[0]
 
+        # 3) Create new person
         tags = self._person_tags_from_extracted(extracted)
         contacts = self._person_contacts_from_extracted(extracted)
         row = self.fetchone(
@@ -489,7 +517,7 @@ class Database:
                RETURNING id""",
             (
                 owner_user_id, channel_id, normalized_code,
-                _truncate(extracted.get('nickname'), 255),
+                display_nickname,
                 _truncate(extracted.get('province'), 100),
                 _truncate(extracted.get('city'), 100),
                 _to_int(extracted.get('age')),

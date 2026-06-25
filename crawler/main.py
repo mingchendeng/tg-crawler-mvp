@@ -783,11 +783,14 @@ class IncrementalCrawler:
         return 'document'
 
     async def _same_person_duplicate_id(self, channel_id: int, text_content: str, extracted: dict):
+        # Rule-based dedup first: exact normalized code, or nickname+code combo, or nickname alone
         code = extracted.get('code')
-        if code is not None:
-            hit = self.deduper.find_duplicate_by_code(self.db, channel_id, code, owner_user_id=self.owner_user_id)
-            if hit is not None:
-                return hit
+        nickname = extracted.get('nickname')
+        hit = self.deduper.find_duplicate_by_nickname_code(
+            self.db, channel_id, nickname, code, owner_user_id=self.owner_user_id
+        )
+        if hit is not None:
+            return hit
 
         if not self.deduper.is_configured():
             return None

@@ -1,11 +1,34 @@
 import json
 import logging
 import os
+import re
 from typing import Any, Dict, List, Optional
 
 import httpx
 
 logger = logging.getLogger('crawler')
+
+
+def _normalize_code(value):
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    text = re.sub(r'[`\s]+', '', text)
+    text = re.sub(r'[^A-Za-z0-9_-]', '', text)
+    return text or None
+
+
+def _normalize_nickname(value):
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    # Remove common decorators and whitespace
+    text = re.sub(r'[^\u4e00-\u9fa5A-Za-z0-9]', '', text)
+    return text or None
 
 _SYSTEM_PROMPT = """你是去重助手。同一 Telegram 频道里，用户可能多次发帖介绍同一个人（改文案、微调格式、重发带图等）。
 根据「新帖」与若干「已入库」摘要，判断是否描述同一人。
@@ -37,21 +60,64 @@ class LLMDeduper:
         return self.enabled and bool(self.api_url) and bool(self.api_key)
 
     def find_duplicate_by_code(self, db, channel_id: int, code: Any, owner_user_id: Optional[int] = None) -> Optional[int]:
-        if code is None or str(code).strip() == '':
+        normalized = _normalize_code(code)
+        if not normalized:
             return None
-        normalized = str(code).strip()
         row = db.fetchone(
             """
             SELECT id FROM messages
             WHERE channel_id = %s
               AND (%s::bigint IS NULL OR owner_user_id = %s)
               AND extracted_json->>'code' IS NOT NULL
-              AND TRIM(extracted_json->>'code') = %s
+              AND regexp_replace(regexp_replace(trim(extracted_json->>'code'), '[`\\s]+', '', 'g'), '[^A-Za-z0-9_-]', '', 'g') = %s
             LIMIT 1
             """,
             (channel_id, owner_user_id, owner_user_id, normalized),
         )
         return int(row[0]) if row else None
+
+    def find_duplicate_by_nickname_code(
+        self, db, channel_id: int, nickname: Any, code: Any, owner_user_id: Optional[int] = None
+    ) -> Optional[int]:
+        """Find duplicate by normalized nickname+code combination (or just nickname when code absent)."""
+        norm_nick = _normalize_nickname(nickname)
+        norm_code = _normalize_code(code)
+
+        # If both nickname and code present, match either exact code or nickname+code combo
+        if norm_nick and norm_code:
+            # First try exact code match
+            hit = self.find_duplicate_by_code(db, channel_id, code, owner_user_id=owner_user_id)
+            if hit is not None:
+                return hit
+            # Then try same normalized nickname + code combo
+            row = db.fetchone(
+                """
+                SELECT id FROM messages
+                WHERE channel_id = %s
+                  AND (%s::bigint IS NULL OR owner_user_id = %s)
+                  AND regexp_replace(regexp_replace(trim(COALESCE(extracted_json->>'nickname', '')), '[`\\s]+', '', 'g'), '[^一-龥A-Za-z0-9]', '', 'g') = %s
+                  AND regexp_replace(regexp_replace(trim(COALESCE(extracted_json->>'code', '')), '[`\\s]+', '', 'g'), '[^A-Za-z0-9_-]', '', 'g') = %s
+                LIMIT 1
+                """,
+                (channel_id, owner_user_id, owner_user_id, norm_nick, norm_code),
+            )
+            return int(row[0]) if row else None
+
+        # Only nickname: match by nickname (must be meaningful)
+        if norm_nick:
+            row = db.fetchone(
+                """
+                SELECT id FROM messages
+                WHERE channel_id = %s
+                  AND (%s::bigint IS NULL OR owner_user_id = %s)
+                  AND regexp_replace(regexp_replace(trim(COALESCE(extracted_json->>'nickname', '')), '[`\\s]+', '', 'g'), '[^一-龥A-Za-z0-9]', '', 'g') = %s
+                LIMIT 1
+                """,
+                (channel_id, owner_user_id, owner_user_id, norm_nick),
+            )
+            return int(row[0]) if row else None
+
+        return None
 
     def _shrink_text(self, text: str) -> str:
         if not text:
